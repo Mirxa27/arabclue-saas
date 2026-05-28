@@ -17,7 +17,7 @@
   "dependencies": {
     "@supabase/ssr": "^0.5.0",
     "@supabase/supabase-js": "^2.45.0",
-    "ai": "^3.4.0",
+    "ai": "^5.0.52",
     "@ai-sdk/openai": "^0.0.66",
     "@ai-sdk/anthropic": "^0.0.50",
     "zod": "^3.23.8",
