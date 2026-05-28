@@ -21,7 +21,7 @@
     "@ai-sdk/openai": "^0.0.66",
     "@ai-sdk/anthropic": "^0.0.50",
     "zod": "^3.23.8",
-    "next": "14.2.32",
+    "next": "15.5.18",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "lucide-react": "^0.453.0",
