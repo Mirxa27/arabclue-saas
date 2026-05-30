@@ -15,6 +15,9 @@ export type Merchant = {
   salla_merchant_id: string | null;
   salla_state: string | null;
   store_url: string | null;
+  store_name?: string | null;
+  name?: string | null;
+  email?: string | null;
   seller_name: string | null;
   vat_number: string | null;
   cr_number: string | null;
@@ -31,6 +34,8 @@ export type Merchant = {
   zatca_onboarded_at: string | null;
   installed_at: string | null;
   uninstalled_at: string | null;
+  dpa_accepted_at?: string | null;
+  dpa_version?: string | null;
 };
 
 export type InvoiceStatus = "generated" | "submitted" | "cleared" | "rejected" | "failed";
@@ -108,6 +113,7 @@ export type VoiceConfig = {
   escalation_phone: string | null;
   knowledge: string | null;
   phone_number: string | null;
+  twilio_incoming_sid?: string | null;
   enabled: boolean;
   updated_at: string | null;
 };
@@ -138,4 +144,30 @@ export type BrandKit = {
   avoid_words: string[];
   dialect: BrandKitDialect;
   updated_at?: string | null;
+};
+
+export type SeoSiteAudit = {
+  status: "idle" | "scanning" | "done" | "error";
+  issues: Array<{
+    severity: "critical" | "warning" | "ok";
+    title: string;
+    detail: string;
+    url?: string;
+  }>;
+  scanned_at?: string | null;
+  score?: number | null;
+};
+
+export type VoiceCallLog = {
+  id: string;
+  merchant_id: string;
+  caller_number: string;
+  caller_name?: string | null;
+  duration_seconds: number;
+  transcript?: string | null;
+  summary?: string | null;
+  booking_id?: string | null;
+  direction: "inbound" | "outbound";
+  status: "completed" | "missed" | "voicemail" | "failed";
+  created_at: string;
 };

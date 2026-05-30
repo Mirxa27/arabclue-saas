@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireUser, getCurrentMerchant } from "@/lib/auth/session";
+import { requireUserApi, getCurrentMerchant } from "@/lib/auth/session";
 import { getServerSupabase } from "@/lib/db/supabase";
 import { submitToFatoora } from "@/lib/zatca/fatoora";
 
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
-  await requireUser();
+  await requireUserApi();
   const merchant = await getCurrentMerchant();
   if (!merchant) return NextResponse.json({ error: "no merchant" }, { status: 400 });
   const supabase = getServerSupabase();
@@ -19,7 +19,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
 }
 
 export async function POST(_req: NextRequest, { params }: { params: { id: string } }) {
-  await requireUser();
+  await requireUserApi();
   const merchant = await getCurrentMerchant();
   if (!merchant) return NextResponse.json({ error: "no merchant" }, { status: 400 });
   const supabase = getServerSupabase();

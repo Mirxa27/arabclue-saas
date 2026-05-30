@@ -1,0 +1,26 @@
+# Hostinger Passenger + Next.js (arabclue.com)
+# Copy to: domains/arabclue.com/public_html/.htaccess after each Hostinger deploy if rewrites break.
+# Do NOT add RewriteRule ^(.*)$ public/$1 — there is no public/ folder; that causes HTTP 500.
+
+Options -Indexes
+
+<Files .env>
+  Require all denied
+</Files>
+
+<Files .htaccess>
+  Require all denied
+</Files>
+
+PassengerAppRoot /home/u726786619/domains/arabclue.com/nodejs
+PassengerAppType node
+PassengerNodejs /opt/alt/alt-nodejs20/root/bin/node
+PassengerStartupFile server.js
+PassengerBaseURI /
+PassengerRestartDir /home/u726786619/domains/arabclue.com/nodejs/tmp
+SetEnv NODE_OPTIONS "--require /home/u726786619/domains/arabclue.com/public_html/.builds/config/preload-timestamp.js"
+SetEnv LSNODE_CONSOLE_LOG console.log
+SetEnv TOKIO_WORKER_THREADS 2
+
+RewriteEngine on
+RewriteRule ^\.builds - [F,L]

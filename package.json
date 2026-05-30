@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start",
+    "start": "next start -H 0.0.0.0 -p ${PORT:-3000}",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
@@ -30,8 +30,7 @@
     "tailwind-merge": "^2.5.4",
     "date-fns": "^4.1.0",
     "qrcode": "^1.5.4",
-    "xmlbuilder2": "^3.1.1",
-    "node-cron": "^3.0.3"
+    "xmlbuilder2": "^3.1.1"
   },
   "devDependencies": {
     "@types/node": "^22.7.0",

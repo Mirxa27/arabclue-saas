@@ -1,8 +1,11 @@
+export const dynamic = "force-dynamic";
+
 import { NextRequest, NextResponse } from "next/server";
 import { scheduler } from "@/lib/social/agent";
 import { buildConnectorsForMerchant } from "@/lib/social/connectors";
-import { getServerSupabase } from "@/lib/db/supabase";
+import { getServiceSupabase } from "@/lib/db/supabase";
 import { handleRouteError } from "@/lib/api/route-handler";
+import { getAgentSettings } from "@/lib/admin/platform-settings";
 import type { ScheduledPost, SocialStore } from "@/lib/social/agent";
 import type { SocialPostStatus } from "@/lib/types/database";
 
@@ -45,7 +48,12 @@ export async function GET(req: NextRequest) {
       return new NextResponse("unauthorized", { status: 401 });
     }
 
-    const supabase = getServerSupabase();
+    const agents = await getAgentSettings();
+    if (!agents.social.enabled) {
+      return NextResponse.json({ ran: 0, results: [], skipped: "social agent disabled" });
+    }
+
+    const supabase = getServiceSupabase();
     const channelCache = new Map<string, ReturnType<typeof buildConnectorsForMerchant>>();
 
     async function connectorsForMerchant(merchantId: string) {
@@ -75,11 +83,18 @@ export async function GET(req: NextRequest) {
           .select("*")
           .eq("status", "scheduled")
           .lte("scheduled_for", beforeISO)
-          .limit(50);
+          .limit(agents.social.maxPostsPerRun ?? 50);
         return ((data ?? []) as SocialPostRow[]).map(rowToScheduledPost);
       },
-      async markPublished(id, when) {
-        await supabase.from("social_posts").update({ status: "published", published_at: when }).eq("id", id);
+      async markPublished(id, when, remoteIds) {
+        await supabase
+          .from("social_posts")
+          .update({
+            status: "published",
+            published_at: when,
+            ...(remoteIds && Object.keys(remoteIds).length ? { remote_ids: remoteIds } : {})
+          })
+          .eq("id", id);
       },
       async markFailed(id, error) {
         await supabase.from("social_posts").update({ status: "failed", error }).eq("id", id);

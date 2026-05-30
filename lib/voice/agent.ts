@@ -17,6 +17,7 @@
  */
 import { z } from "zod";
 import { sallaAPI } from "@/lib/salla/oauth";
+import { getPersona } from "@/lib/agents/personas";
 import { SallaOrdersResponseSchema, SallaProductsResponseSchema } from "@/lib/types/salla";
 
 export type VoicePersona = {
@@ -38,12 +39,21 @@ const DIALECT_GUIDE: Record<VoicePersona["dialect"], string> = {
   msa: "تكلّم بالعربية الفصحى الواضحة والمهذّبة."
 };
 
-export function buildVoiceInstructions(persona: VoicePersona): string {
+export function buildVoiceInstructions(merchantPersona: VoicePersona): string {
+  const salem = getPersona("voice");
+
   return [
-    `أنت المساعد الصوتي لمتجر «${persona.storeName}». مهمتك الردّ على مكالمات العملاء باحترافية ودفء.`,
-    DIALECT_GUIDE[persona.dialect],
-    persona.hours ? `ساعات العمل: ${persona.hours}.` : "",
-    persona.knowledge ? `معلومات إضافية عن المتجر: ${persona.knowledge}` : "",
+    salem.systemPrefix,
+    "",
+    `السياق: أنت تردّ على مكالمات متجر «${merchantPersona.storeName}».`,
+    "",
+    `أسلوب الكلام: ${salem.dialect === "khaliji" ? "اللهجة السعودية الخليجية الطبيعية والمحترمة" : "العربية الفصحى الواضحة والمهذبة"}.`,
+    `استخدم عبارات سعودية أصيلة: «حيّاك الله»، «أبشر»، «تأمر»، «تفضّل».`,
+    "",
+    `سمات الشخصية: ${salem.traits.join("، ")} — ${salem.register === "professional" ? "سجل مهني محترم" : "سجل دافئ وودود"}.`,
+    "",
+    merchantPersona.hours ? `ساعات العمل: ${merchantPersona.hours}.` : "",
+    merchantPersona.knowledge ? `معلومات إضافية عن المتجر: ${merchantPersona.knowledge}` : "",
     "",
     "قواعد صارمة:",
     "- لا تَعِد بمواعيد توصيل أو أسعار غير مؤكدة. استخدم الأدوات للتحقق من حالة الطلب أو توفّر المنتج.",
@@ -53,7 +63,7 @@ export function buildVoiceInstructions(persona: VoicePersona): string {
     "- إذا لم تفهم أو خرج الطلب عن نطاقك → صعّد بأدب بدل التخمين.",
     "- لا تستخدم أي محتوى غير لائق أو يخالف القيم.",
     "",
-    "ابدأ المكالمة بترحيب قصير باسم المتجر ثم اسأل كيف يمكنك المساعدة."
+    "ابدأ المكالمة بترحيب قصير: «حيّاك الله، هاتف [اسم المتجر]، معك سالم. كيف أقدر أخدمك؟»"
   ]
     .filter(Boolean)
     .join("\n");

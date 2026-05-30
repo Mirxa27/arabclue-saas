@@ -1,8 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { requireUser, getCurrentMerchant } from "@/lib/auth/session";
+import { requireUserApi, getCurrentMerchant } from "@/lib/auth/session";
 import { getServerSupabase } from "@/lib/db/supabase";
 import { handleRouteError } from "@/lib/api/route-handler";
+import { upsertSocialChannel } from "@/lib/oauth/channels";
+import { getFeatureSettings } from "@/lib/admin/platform-settings";
+import { merchantCanUseFeature, featureGateMessage } from "@/lib/billing/entitlements";
 
 const BodySchema = z.object({
   platform: z.enum(["instagram", "tiktok", "x", "snapchat", "linkedin", "whatsapp"]),
@@ -12,25 +15,25 @@ const BodySchema = z.object({
 
 export async function POST(req: NextRequest) {
   try {
-    await requireUser();
+    await requireUserApi();
     const merchant = await getCurrentMerchant();
     if (!merchant) return NextResponse.json({ error: "no merchant" }, { status: 400 });
 
+    const features = await getFeatureSettings();
+    if (!features.socialOAuth) {
+      return NextResponse.json({ error: "Social OAuth is disabled by platform admin" }, { status: 503 });
+    }
+    if (!merchantCanUseFeature(merchant, "social")) {
+      return NextResponse.json({ error: featureGateMessage("social") }, { status: 402 });
+    }
+
     const body = BodySchema.parse(await req.json());
     const supabase = getServerSupabase();
+    await upsertSocialChannel(supabase, merchant.id, body.platform, {
+      externalId: body.externalId,
+      accessToken: body.accessToken
+    });
 
-    const { error } = await supabase.from("social_channels").upsert(
-      {
-        merchant_id: merchant.id,
-        platform: body.platform,
-        external_id: body.externalId,
-        access_token_encrypted: body.accessToken,
-        connected_at: new Date().toISOString()
-      },
-      { onConflict: "merchant_id,platform" }
-    );
-
-    if (error) throw new Error(error.message);
     return NextResponse.json({ ok: true, platform: body.platform });
   } catch (err) {
     return handleRouteError(err);

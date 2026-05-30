@@ -13,6 +13,7 @@ dist
 # env
 .env
 .env*.local
+scripts/hostinger-hpanel.env
 !.env.example
 
 # logs
@@ -21,8 +22,16 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
+# agentic OS — local session logs (keep structure + project state tracked)
+data/daily-logs/*
+!data/daily-logs/.gitkeep
+data/inbox/*
+!data/inbox/.gitkeep
+data/logs/
+
 # misc
 .DS_Store
+arabclue-hostinger-deploy.zip
 *.pem
 .idea
 .vscode

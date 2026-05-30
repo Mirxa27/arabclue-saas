@@ -9,17 +9,23 @@ export function PageShell({
   title,
   merchant,
   loading,
-  children
+  children,
 }: {
-  title: string;
+  title: ReactNode;
   merchant: Merchant | null;
-  loading: boolean;
+  loading?: boolean;
   children: ReactNode;
 }) {
+  const titleLabel = typeof title === "string" ? title : "page";
+
   return (
-    <>
+    <div className="flex flex-col min-h-full">
       <Topbar merchant={merchant} title={title} />
-      {loading ? <PageSkeleton title={title} /> : children}
-    </>
+      <div className="flex-1 w-full px-4 sm:px-6 lg:px-8 2xl:px-10 py-5 sm:py-6 lg:py-8">
+        <div className="dashboard-content-glass mx-auto w-full max-w-[1680px] p-4 sm:p-5 lg:p-7">
+        {loading ? <PageSkeleton title={titleLabel} /> : children}
+        </div>
+      </div>
+    </div>
   );
 }

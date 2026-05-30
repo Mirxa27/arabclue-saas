@@ -1,12 +1,14 @@
-import { Sidebar } from "@/components/dashboard/sidebar";
 import { requireUser } from "@/lib/auth/session";
+import { isPlatformAdmin } from "@/lib/auth/admin";
+import { ErrorBoundary } from "@/components/ui/error-boundary";
+import { DashboardChrome } from "@/components/dashboard/dashboard-chrome";
 
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
   await requireUser();
+  const showAdminLink = await isPlatformAdmin();
   return (
-    <div className="min-h-screen flex bg-paper">
-      <Sidebar />
-      <main className="flex-1 flex flex-col min-w-0">{children}</main>
-    </div>
+    <ErrorBoundary>
+      <DashboardChrome showAdminLink={showAdminLink}>{children}</DashboardChrome>
+    </ErrorBoundary>
   );
 }

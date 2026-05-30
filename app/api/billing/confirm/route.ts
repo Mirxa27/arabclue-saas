@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { requireUser, getCurrentMerchant } from "@/lib/auth/session";
+import { requireUserApi, getCurrentMerchant } from "@/lib/auth/session";
 import { handleRouteError } from "@/lib/api/route-handler";
 import { confirmBillingPayment } from "@/lib/billing/service";
 
@@ -11,7 +11,7 @@ const BodySchema = z.object({
 
 export async function POST(req: NextRequest) {
   try {
-    await requireUser();
+    await requireUserApi();
     const merchant = await getCurrentMerchant();
     if (!merchant) return NextResponse.json({ error: "no merchant" }, { status: 400 });
 

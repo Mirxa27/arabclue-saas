@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSupabase } from "@/lib/db/supabase";
+import { getServiceSupabase } from "@/lib/db/supabase";
 import { dispatchVoiceTool, ToolCallSchema, type VoicePersona, type VoiceToolContext } from "@/lib/voice/agent";
 
 export const runtime = "nodejs";
@@ -20,7 +20,7 @@ export async function POST(req: NextRequest) {
   const merchantId = String(body.merchantId ?? "");
   const call = ToolCallSchema.parse(body.call);
 
-  const supabase = getServerSupabase();
+  const supabase = getServiceSupabase();
   const { data: merchant } = await supabase.from("merchants").select("*").eq("id", merchantId).maybeSingle();
   if (!merchant) return NextResponse.json({ error: "no merchant" }, { status: 400 });
 

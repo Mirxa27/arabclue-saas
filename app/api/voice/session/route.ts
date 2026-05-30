@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireUser, getCurrentMerchant } from "@/lib/auth/session";
+import { requireUserApi, getCurrentMerchant } from "@/lib/auth/session";
 import { getServerSupabase } from "@/lib/db/supabase";
 import { buildRealtimeSessionConfig, type VoicePersona } from "@/lib/voice/agent";
 
@@ -11,7 +11,7 @@ export const runtime = "nodejs";
  * without ever seeing the long-lived OPENAI_API_KEY.
  */
 export async function POST(_req: NextRequest) {
-  await requireUser();
+  await requireUserApi();
   const merchant = await getCurrentMerchant();
   if (!merchant) return NextResponse.json({ error: "no merchant" }, { status: 400 });
 

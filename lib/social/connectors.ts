@@ -8,6 +8,7 @@
  * Production keys: never hard-code. Load from env or per-merchant encrypted credential store.
  */
 import type { Copy, PlatformConnector, VisualBrief, Platform } from "./types";
+import { decryptSecret } from "@/lib/crypto/secrets";
 
 // Minimal fetch helper with retry + Saudi-friendly timeout (2G/3G fringes)
 async function postJSON(url: string, body: unknown, headers: Record<string, string> = {}) {
@@ -202,25 +203,25 @@ export function buildConnectorsForMerchant(channels: SocialChannelRow[]): Platfo
 
   const ig = byPlatform.get("instagram");
   const igUserId = ig?.external_id ?? process.env.META_IG_USER_ID;
-  const igToken = ig?.access_token_encrypted ?? process.env.META_PAGE_ACCESS_TOKEN;
+  const igToken = decryptSecret(ig?.access_token_encrypted) || process.env.META_PAGE_ACCESS_TOKEN;
   if (igUserId && igToken) out.push(instagramConnector({ igUserId, accessToken: igToken }));
 
   const x = byPlatform.get("x");
-  const xBearer = x?.access_token_encrypted ?? process.env.X_BEARER;
+  const xBearer = decryptSecret(x?.access_token_encrypted) || process.env.X_BEARER;
   if (xBearer) out.push(xConnector({ bearer: xBearer }));
 
   const li = byPlatform.get("linkedin");
   const liUrn = li?.external_id ?? process.env.LINKEDIN_ACTOR_URN;
-  const liToken = li?.access_token_encrypted ?? process.env.LINKEDIN_ACCESS_TOKEN;
+  const liToken = decryptSecret(li?.access_token_encrypted) || process.env.LINKEDIN_ACCESS_TOKEN;
   if (liUrn && liToken) out.push(linkedInConnector({ actorUrn: liUrn, accessToken: liToken }));
 
   const tt = byPlatform.get("tiktok");
-  const ttToken = tt?.access_token_encrypted ?? process.env.TIKTOK_ACCESS_TOKEN;
+  const ttToken = decryptSecret(tt?.access_token_encrypted) || process.env.TIKTOK_ACCESS_TOKEN;
   if (ttToken) out.push(tikTokConnector({ accessToken: ttToken }));
 
   const wa = byPlatform.get("whatsapp");
   const waPhone = wa?.external_id ?? process.env.WHATSAPP_PHONE_ID;
-  const waToken = wa?.access_token_encrypted ?? process.env.WHATSAPP_ACCESS_TOKEN;
+  const waToken = decryptSecret(wa?.access_token_encrypted) || process.env.WHATSAPP_ACCESS_TOKEN;
   if (waPhone && waToken) out.push(whatsappConnector({ phoneNumberId: waPhone, accessToken: waToken }));
 
   return out;

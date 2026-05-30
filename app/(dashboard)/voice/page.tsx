@@ -1,32 +1,62 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { PageShell } from "@/components/dashboard/page-shell";
-import { Badge, Card, CardHeader, CardSubtitle, CardTitle, Empty, Field, Input, Textarea } from "@/components/ui/primitives";
+import { Badge, Card, Empty } from "@/components/ui/primitives";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/toast";
-import { apiFetch, ApiClientError } from "@/lib/api/client";
-import { getBrowserSupabase } from "@/lib/db/supabase-browser";
 import { useMerchant } from "@/hooks/use-merchant";
-import type { Booking, VoiceConfig } from "@/lib/types/database";
-import { Phone, Save } from "lucide-react";
+import { apiFetch, ApiClientError } from "@/lib/api/client";
+import type { VoiceCallLog } from "@/lib/types/database";
+import {
+  PhoneCall,
+  PhoneIncoming,
+  PhoneOutgoing,
+  PhoneMissed,
+  Mic,
+  MicOff,
+  Clock,
+  Search,
+} from "lucide-react";
+import { format, parseISO } from "date-fns";
 
-const defaultConfig: Omit<VoiceConfig, "merchant_id" | "updated_at"> = {
-  dialect: "khaliji",
-  hours: "",
-  escalation_phone: "",
-  knowledge: "",
-  phone_number: null,
-  enabled: false
+type FilterDirection = "all" | "inbound" | "outbound";
+
+const DIRECTION_ICONS: Record<string, React.ElementType> = {
+  inbound: PhoneIncoming,
+  outbound: PhoneOutgoing,
+  missed: PhoneMissed,
 };
+
+const DIRECTION_COLORS: Record<string, string> = {
+  inbound: "text-accent",
+  outbound: "text-success",
+  missed: "text-danger",
+};
+
+const STATUS_TONES: Record<string, "success" | "danger" | "warn" | "default"> = {
+  completed: "success",
+  missed: "danger",
+  failed: "danger",
+  voicemail: "warn",
+};
+
+function durationLabel(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`;
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return `${m}m ${s}s`;
+}
 
 export default function VoicePage() {
   const { merchant, loading, error: merchantError } = useMerchant();
   const { toast } = useToast();
-  const [config, setConfig] = useState(defaultConfig);
-  const [bookings, setBookings] = useState<Booking[]>([]);
+  const [calls, setCalls] = useState<VoiceCallLog[]>([]);
+  const [config, setConfig] = useState<Record<string, boolean | string>>({});
+  const [busy, setBusy] = useState(false);
   const [dataLoading, setDataLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
+  const [direction, setDirection] = useState<FilterDirection>("all");
+  const [search, setSearch] = useState("");
 
   useEffect(() => {
     if (merchantError) toast(merchantError, "error");
@@ -40,124 +70,251 @@ export default function VoicePage() {
     (async () => {
       setDataLoading(true);
       try {
-        const sb = getBrowserSupabase();
-        const [{ data: vc, error: vcErr }, { data: bk, error: bkErr }] = await Promise.all([
-          sb.from("voice_configs").select("*").eq("merchant_id", merchant.id).maybeSingle(),
-          sb.from("bookings").select("*").eq("merchant_id", merchant.id).order("created_at", { ascending: false }).limit(20)
+        const [cs, cl] = await Promise.all([
+          apiFetch<{ config?: Record<string, boolean | string> }>("/api/voice/config"),
+          apiFetch<{ calls?: VoiceCallLog[] }>("/api/voice/calls?limit=80"),
         ]);
-        if (vcErr) throw vcErr;
-        if (bkErr) throw bkErr;
-        if (vc) {
-          setConfig({
-            dialect: vc.dialect ?? "khaliji",
-            hours: vc.hours ?? "",
-            escalation_phone: vc.escalation_phone ?? "",
-            knowledge: vc.knowledge ?? "",
-            phone_number: vc.phone_number,
-            enabled: vc.enabled ?? false
-          });
-        }
-        setBookings((bk ?? []) as Booking[]);
+        setConfig(cs.config ?? {});
+        setCalls(
+          (cl.calls ?? []).sort(
+            (a, b) =>
+              new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+          )
+        );
       } catch (err) {
-        toast(err instanceof Error ? err.message : "Failed to load voice config", "error");
+        toast(
+          err instanceof ApiClientError ? err.message : "Failed to load voice data",
+          "error"
+        );
       } finally {
         setDataLoading(false);
       }
     })();
   }, [merchant, toast]);
 
-  async function save() {
-    setSaving(true);
+  async function toggleAgent() {
+    const next = !config.enabled;
+    setBusy(true);
     try {
       await apiFetch("/api/voice/config", {
-        method: "POST",
-        body: JSON.stringify(config)
+        method: "PATCH",
+        body: JSON.stringify({ enabled: next }),
       });
-      toast("Voice config saved", "success");
+      setConfig((c) => ({ ...c, enabled: next }));
+      toast(next ? "Voice agent activated" : "Voice agent paused", "success");
     } catch (err) {
-      toast(err instanceof ApiClientError ? err.message : "Save failed", "error");
+      toast(
+        err instanceof ApiClientError ? err.message : "Update failed",
+        "error"
+      );
     } finally {
-      setSaving(false);
+      setBusy(false);
     }
   }
 
+  const filtered = useMemo(() => {
+    let list = calls;
+    if (direction !== "all")
+      list = list.filter((c) => c.direction === direction);
+    if (search.trim()) {
+      const q = search.toLowerCase();
+      list = list.filter(
+        (c) =>
+          c.caller_number?.toLowerCase().includes(q) ||
+          c.caller_name?.toLowerCase().includes(q)
+      );
+    }
+    return list;
+  }, [calls, direction, search]);
+
+  const summary = {
+    total: calls.length,
+    completed: calls.filter((c) => c.status === "completed").length,
+    missed: calls.filter((c) => c.status === "missed").length,
+    totalMinutes: Math.round(
+      calls.reduce((s, c) => s + (c.duration_seconds ?? 0), 0) / 60
+    ),
+  };
+
+  const agentActive = Boolean(config.enabled);
+  const isLoading = loading || dataLoading;
+
   return (
-    <PageShell title="Voice Agent" merchant={merchant} loading={loading || dataLoading}>
-      <div className="p-8 space-y-6 overflow-y-auto">
+    <PageShell title="Voice Agent" merchant={merchant} loading={isLoading}>
+      <div className="space-y-6">
+        {/* Status Card */}
         <Card>
-          <CardHeader>
-            <div>
-              <CardTitle>Gulf-dialect phone agent</CardTitle>
-              <CardSubtitle>Answers your store line 24/7 in Saudi Arabic. Order status, bookings, FAQs, clean escalation.</CardSubtitle>
-            </div>
-            <Badge tone={config.enabled ? "success" : "default"}>{config.enabled ? "Live" : "Off"}</Badge>
-          </CardHeader>
-
-          <div className="grid md:grid-cols-2 gap-5 mt-2">
-            <Field label="Dialect">
-              <select
-                className="w-full border border-rule bg-paper px-3 py-2.5 text-sm focus:outline-none focus:border-ink/50"
-                value={config.dialect}
-                onChange={(e) => setConfig({ ...config, dialect: e.target.value as VoiceConfig["dialect"] })}
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+            <div className="flex items-center gap-4">
+              <div
+                className={`w-12 h-12 rounded-2xl flex items-center justify-center border ${
+                  agentActive
+                    ? "bg-success/10 border-success/30 text-success"
+                    : "bg-ink/5 border-rule/30 text-ink-mute"
+                }`}
               >
-                <option value="khaliji">Khaliji (Saudi)</option>
-                <option value="msa">Modern Standard Arabic</option>
-              </select>
-            </Field>
-            <Field label="Escalation phone" hint="Where calls hand off to a human">
-              <Input value={config.escalation_phone ?? ""} onChange={(e) => setConfig({ ...config, escalation_phone: e.target.value })} placeholder="+9665XXXXXXXX" />
-            </Field>
-            <Field label="Business hours">
-              <Input value={config.hours ?? ""} onChange={(e) => setConfig({ ...config, hours: e.target.value })} placeholder="٩ صباحاً – ١١ مساءً" />
-            </Field>
-            <Field label="Store number" hint="Provisioned STC / Twilio line">
-              <Input value={config.phone_number ?? ""} disabled placeholder="provisioned after setup" />
-            </Field>
-            <div className="md:col-span-2">
-              <Field label="Knowledge" hint="Return policy, delivery areas, anything the agent should know">
-                <Textarea rows={4} value={config.knowledge ?? ""} onChange={(e) => setConfig({ ...config, knowledge: e.target.value })} />
-              </Field>
+                {agentActive ? <Mic size={22} /> : <MicOff size={22} />}
+              </div>
+              <div>
+                <h2 className="text-lg font-semibold text-ink">
+                  {agentActive ? "Agent Active" : "Agent Paused"}
+                </h2>
+                <p className="text-xs text-ink-mute mt-0.5">
+                  {agentActive
+                    ? "Inbound and outbound calls are being handled automatically."
+                    : "Toggle to activate voice agent for incoming calls."}
+                </p>
+                {config.phone_number && (
+                  <p className="text-xs font-mono text-accent mt-1">
+                    {config.phone_number}
+                  </p>
+                )}
+              </div>
             </div>
-          </div>
-
-          <div className="mt-5 flex items-center gap-3">
-            <Button onClick={save} disabled={saving}>
-              <Save size={14} /> {saving ? "Saving…" : "Save config"}
+            <Button
+              variant={agentActive ? "outline" : "primary"}
+              onClick={toggleAgent}
+              disabled={busy}
+            >
+              {agentActive ? <MicOff size={14} /> : <Mic size={14} />}
+              {agentActive ? "Pause" : "Activate"}
             </Button>
-            <label className="flex items-center gap-2 text-sm text-ink-soft">
-              <input type="checkbox" checked={config.enabled} onChange={(e) => setConfig({ ...config, enabled: e.target.checked })} />
-              Enable on store line
-            </label>
           </div>
         </Card>
 
-        <Card>
-          <CardHeader>
-            <div>
-              <CardTitle>Recent bookings</CardTitle>
-              <CardSubtitle>Captured by the voice agent.</CardSubtitle>
+        {/* Summary bar */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+          {[
+            { label: "Total Calls", value: String(summary.total) },
+            { label: "Completed", value: String(summary.completed) },
+            { label: "Missed", value: String(summary.missed) },
+            { label: "Total Talk Time", value: `${summary.totalMinutes} min` },
+          ].map((s) => (
+            <div
+              key={s.label}
+              className="p-4 rounded-2xl bg-paper-deep/20 border border-rule/30"
+            >
+              <div className="text-[10px] font-mono uppercase tracking-wider text-ink-mute">
+                {s.label}
+              </div>
+              <div className="mt-1.5 text-xl font-semibold nums text-ink">
+                {s.value}
+              </div>
             </div>
-            <Phone size={18} className="text-ink-mute" />
-          </CardHeader>
-          {bookings.length === 0 ? (
-            <Empty title="No bookings yet" hint="Bookings created by the voice agent will appear here." />
+          ))}
+        </div>
+
+        {/* Toolbar */}
+        <div className="flex items-center gap-3 flex-wrap">
+          <div className="flex-1 min-w-[200px] relative">
+            <Search
+              size={15}
+              strokeWidth={2}
+              className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-mute"
+            />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search by number or name..."
+              className="w-full h-10 pl-10 pr-4 rounded-xl bg-paper-deep/30 border border-rule/40 text-sm text-ink placeholder:text-ink-mute/50 focus:outline-none focus:border-accent/40 focus:ring-2 focus:ring-accent/10 transition-all"
+            />
+          </div>
+          <div className="flex items-center rounded-xl border border-rule/40 bg-paper-deep/20 p-1 gap-1">
+            {(["all", "inbound", "outbound"] as FilterDirection[]).map((d) => (
+              <button
+                key={d}
+                type="button"
+                onClick={() => setDirection(d)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-mono uppercase tracking-wider transition-all ${
+                  direction === d
+                    ? "bg-accent text-paper shadow-sm"
+                    : "text-ink-mute hover:text-ink"
+                }`}
+              >
+                {d}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Call Log */}
+        <Card className="p-0 overflow-hidden">
+          {filtered.length === 0 ? (
+            <div className="p-12 text-center">
+              <Empty
+                title={calls.length === 0 ? "No call history" : "No matching calls"}
+                hint={
+                  calls.length === 0
+                    ? "Activate the voice agent to start receiving and placing calls."
+                    : "Try a different filter or search term."
+                }
+              />
+            </div>
           ) : (
-            <ul className="divide-y divide-rule">
-              {bookings.map((b) => (
-                <li key={b.id} className="py-3 flex items-center justify-between">
-                  <div>
-                    <p className="font-medium">
-                      {b.name} · <span className="font-mono text-sm text-ink-mute">{b.mobile}</span>
-                    </p>
-                    <p className="text-sm text-ink-soft">
-                      {b.preferred_time}
-                      {b.note ? ` — ${b.note}` : ""}
-                    </p>
-                  </div>
-                  <Badge tone={b.status === "confirmed" ? "success" : "default"}>{b.status}</Badge>
-                </li>
-              ))}
-            </ul>
+            <div className="overflow-x-auto w-full">
+              <table className="w-full text-sm min-w-[700px]">
+                <thead className="bg-paper-deep/35 border-b border-rule/50">
+                  <tr className="text-left text-[10px] uppercase tracking-widest text-ink-mute font-mono">
+                    <th className="px-6 py-4">Date</th>
+                    <th className="px-6 py-4">Direction</th>
+                    <th className="px-6 py-4">Caller</th>
+                    <th className="px-6 py-4">Duration</th>
+                    <th className="px-6 py-4">Status</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-rule/30">
+                  {filtered.map((call) => {
+                    const Icon = DIRECTION_ICONS[call.direction] ?? PhoneCall;
+                    return (
+                      <tr
+                        key={call.id}
+                        className="hover:bg-paper-deep/20 transition-colors duration-200"
+                      >
+                        <td className="px-6 py-3.5">
+                          <div className="flex items-center gap-2">
+                            <Clock size={12} className="text-ink-mute" />
+                            <span className="text-xs text-ink-soft font-mono">
+                              {call.created_at
+                                ? format(parseISO(call.created_at), "MMM d, HH:mm")
+                                : "—"}
+                            </span>
+                          </div>
+                        </td>
+                        <td className="px-6 py-3.5">
+                          <div
+                            className={`flex items-center gap-1.5 ${DIRECTION_COLORS[call.direction] ?? "text-ink-mute"}`}
+                          >
+                            <Icon size={14} />
+                            <span className="text-[10px] font-mono uppercase tracking-wider">
+                              {call.direction}
+                            </span>
+                          </div>
+                        </td>
+                        <td className="px-6 py-3.5">
+                          <span className="font-mono text-xs text-ink">
+                            {call.caller_number}
+                          </span>
+                          {call.caller_name && (
+                            <span className="block text-[10px] text-ink-mute mt-0.5">
+                              {call.caller_name}
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-6 py-3.5 font-mono text-xs nums text-ink-soft">
+                          {durationLabel(call.duration_seconds ?? 0)}
+                        </td>
+                        <td className="px-6 py-3.5">
+                          <Badge tone={STATUS_TONES[call.status] ?? "default"}>
+                            {call.status}
+                          </Badge>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           )}
         </Card>
       </div>

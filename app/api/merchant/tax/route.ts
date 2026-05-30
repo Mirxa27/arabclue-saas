@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { requireUser, getCurrentMerchant } from "@/lib/auth/session";
+import { requireUserApi, getCurrentMerchant } from "@/lib/auth/session";
 import { getServerSupabase } from "@/lib/db/supabase";
 
 const Schema = z.object({
@@ -17,7 +17,7 @@ const Schema = z.object({
 });
 
 export async function POST(req: NextRequest) {
-  await requireUser();
+  await requireUserApi();
   const merchant = await getCurrentMerchant();
   if (!merchant) return NextResponse.json({ error: "no merchant" }, { status: 400 });
   const parsed = Schema.safeParse(await req.json());

@@ -1,9 +1,13 @@
+export const dynamic = "force-dynamic";
+
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { requireUser, getCurrentMerchant } from "@/lib/auth/session";
+import { requireUserApi, getCurrentMerchant } from "@/lib/auth/session";
 import { getServerSupabase } from "@/lib/db/supabase";
 import { runSocialPipeline } from "@/lib/social/agent";
 import { handleRouteError } from "@/lib/api/route-handler";
+import { merchantCanUseFeature, featureGateMessage } from "@/lib/billing/entitlements";
+import { getAgentSettings } from "@/lib/admin/platform-settings";
 import type { BrandVoice, Platform, Product } from "@/lib/social/types";
 import type { SallaProduct } from "@/lib/types/database";
 
@@ -32,11 +36,19 @@ function toProduct(p: SallaProduct): Product {
 
 export async function POST(req: NextRequest) {
   try {
-    await requireUser();
+    await requireUserApi();
     const merchant = await getCurrentMerchant();
     if (!merchant) return NextResponse.json({ error: "no merchant" }, { status: 400 });
 
-    const body = RequestSchema.parse(await req.json().catch(() => ({})));
+    const agents = await getAgentSettings();
+    if (!agents.social.enabled) {
+      return NextResponse.json({ error: "Social agent is disabled platform-wide" }, { status: 503 });
+    }
+    if (!merchantCanUseFeature(merchant, "social")) {
+      return NextResponse.json({ error: featureGateMessage("social") }, { status: 402 });
+    }
+
+    const body = RequestSchema.parse(await req.json());
     const supabase = getServerSupabase();
 
     const [{ data: kit }, { data: products }] = await Promise.all([
@@ -93,7 +105,7 @@ export async function POST(req: NextRequest) {
 
 export async function GET() {
   try {
-    await requireUser();
+    await requireUserApi();
     const merchant = await getCurrentMerchant();
     if (!merchant) return NextResponse.json({ posts: [] });
     const supabase = getServerSupabase();

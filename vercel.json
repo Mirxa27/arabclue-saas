@@ -1,18 +1,21 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "crons": [
-    {
-      "path": "/api/cron/social-scheduler",
-      "schedule": "*/15 * * * *"
-    }
-  ],
-  "regions": ["fra1", "bom1"],
   "headers": [
     {
       "source": "/(.*)",
       "headers": [
         { "key": "Strict-Transport-Security", "value": "max-age=63072000; includeSubDomains; preload" }
       ]
+    }
+  ],
+  "crons": [
+    {
+      "path": "/api/cron/employees-tick",
+      "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/social-scheduler",
+      "schedule": "*/15 * * * *"
     }
   ]
 }

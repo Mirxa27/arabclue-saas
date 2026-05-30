@@ -1,4 +1,4 @@
-import { getServerSupabase } from "@/lib/db/supabase";
+import { getServerSupabase, getServiceSupabase } from "@/lib/db/supabase";
 import { getPlan, type BillingPlan } from "@/lib/billing/plans";
 import { fetchMoyasarPayment, verifyPaymentMatchesIntent } from "@/lib/moyasar/client";
 import type { MerchantPlan } from "@/lib/types/database";
@@ -52,7 +52,19 @@ export async function activateSubscription(args: {
   moyasarPaymentId: string;
   paymentPayload: unknown;
 }) {
-  const supabase = getServerSupabase();
+  return activateSubscriptionWithClient(getServerSupabase(), args);
+}
+
+async function activateSubscriptionWithClient(
+  supabase: ReturnType<typeof getServerSupabase>,
+  args: {
+    merchantId: string;
+    plan: MerchantPlan;
+    billingPaymentId: string;
+    moyasarPaymentId: string;
+    paymentPayload: unknown;
+  }
+) {
   const now = new Date();
   const expires = new Date(now);
   expires.setDate(expires.getDate() + SUBSCRIPTION_DAYS);
@@ -84,7 +96,17 @@ export async function confirmBillingPayment(args: {
   moyasarPaymentId: string;
   intentId: string;
 }) {
-  const supabase = getServerSupabase();
+  return confirmBillingPaymentWithClient(getServerSupabase(), args);
+}
+
+async function confirmBillingPaymentWithClient(
+  supabase: ReturnType<typeof getServerSupabase>,
+  args: {
+    merchantId: string;
+    moyasarPaymentId: string;
+    intentId: string;
+  }
+) {
 
   const { data: intent, error } = await supabase
     .from("billing_payments")
@@ -117,7 +139,7 @@ export async function confirmBillingPayment(args: {
     throw new Error("Payment merchant mismatch");
   }
 
-  await activateSubscription({
+  await activateSubscriptionWithClient(supabase, {
     merchantId: args.merchantId,
     plan: row.plan as MerchantPlan,
     billingPaymentId: row.id,
@@ -134,12 +156,18 @@ export async function handleMoyasarWebhookPayment(paymentId: string) {
 
   const merchantId = payment.metadata?.merchant_id;
   const intentId = payment.metadata?.intent_id;
+
+  if (payment.metadata?.type === "employee") {
+    const { handleEmployeeMoyasarWebhook } = await import("@/lib/billing/employee-billing");
+    return handleEmployeeMoyasarWebhook(paymentId);
+  }
+
   const plan = payment.metadata?.plan as BillingPlan | undefined;
 
   if (!merchantId || !intentId || !plan) {
     return { handled: false, reason: "missing_metadata" };
   }
 
-  await confirmBillingPayment({ merchantId, moyasarPaymentId: payment.id, intentId });
+  await confirmBillingPaymentWithClient(getServiceSupabase(), { merchantId, moyasarPaymentId: payment.id, intentId });
   return { handled: true, merchantId, plan };
 }

@@ -13,6 +13,7 @@
  * (writes to DB, calls platform APIs); the others are pure planning.
  */
 import { aiStructured, aiText } from "@/lib/ai/providers";
+import { getPersona } from "@/lib/agents/personas";
 import { nextSignificantEvents } from "./calendar";
 import {
   CopySchema,
@@ -49,9 +50,12 @@ export async function planner(input: {
   const events = nextSignificantEvents(new Date(input.horizon.startISO), 6);
   const postsPerWeek = input.postsPerWeek ?? 5;
   const target = Math.round((postsPerWeek * input.horizon.days) / 7);
+  const noora = getPersona("social");
 
   const system = `
-You are the planner agent for arabclue, an Arabic-first social media operations layer for Saudi/GCC SMBs.
+${noora.systemPrefix}
+
+You are the planner agent for arabclue, working under Noora — an Arabic-first social media operations layer for Saudi/GCC SMBs.
 Your job: build a calendar of social posts that balances product-led conversion, brand storytelling, and
 moments from the Saudi cultural calendar.
 
@@ -195,7 +199,7 @@ export type ScheduledPost = {
 export interface SocialStore {
   upsertPost(p: ScheduledPost): Promise<void>;
   listDue(beforeISO: string): Promise<ScheduledPost[]>;
-  markPublished(id: string, when: string): Promise<void>;
+  markPublished(id: string, when: string, remoteIds?: Record<string, string>): Promise<void>;
   markFailed(id: string, error: string): Promise<void>;
 }
 
@@ -216,13 +220,15 @@ export async function scheduler(opts: {
           ? await opts.connectorsForMerchant(sp.merchantId)
           : (opts.connectors ?? []);
 
+      const remoteIds: Record<string, string> = {};
       for (const platform of sp.post.platforms) {
         const conn = connectors.find((c) => c.platform === platform);
         const copy = sp.copies[platform];
         if (!conn || !copy) continue;
-        await conn.publish({ copy, visualBrief: sp.visualBrief });
+        const { remoteId } = await conn.publish({ copy, visualBrief: sp.visualBrief });
+        remoteIds[platform] = remoteId;
       }
-      await opts.store.markPublished(sp.id, new Date().toISOString());
+      await opts.store.markPublished(sp.id, new Date().toISOString(), remoteIds);
       results.push({ id: sp.id, ok: true });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);

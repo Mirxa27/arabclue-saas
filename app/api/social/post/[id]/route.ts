@@ -1,16 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { requireUser, getCurrentMerchant } from "@/lib/auth/session";
+import { requireUserApi, getCurrentMerchant } from "@/lib/auth/session";
 import { getServerSupabase } from "@/lib/db/supabase";
 
 const PatchSchema = z.object({
   scheduledFor: z.string().optional(),
   status: z.enum(["scheduled", "canceled"]).optional(),
-  copies: z.record(z.unknown()).optional()
+  copies: z.record(z.unknown()).optional(),
+  hook: z.string().optional()
 });
 
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
-  await requireUser();
+  await requireUserApi();
   const merchant = await getCurrentMerchant();
   if (!merchant) return NextResponse.json({ error: "no merchant" }, { status: 400 });
   const supabase = getServerSupabase();
@@ -25,7 +26,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
 }
 
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
-  await requireUser();
+  await requireUserApi();
   const merchant = await getCurrentMerchant();
   if (!merchant) return NextResponse.json({ error: "no merchant" }, { status: 400 });
   const body = PatchSchema.parse(await req.json());
@@ -35,7 +36,8 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     .update({
       scheduled_for: body.scheduledFor,
       status: body.status,
-      copies: body.copies
+      copies: body.copies,
+      hook: body.hook
     })
     .eq("id", params.id)
     .eq("merchant_id", merchant.id);
@@ -44,7 +46,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 }
 
 export async function DELETE(_req: NextRequest, { params }: { params: { id: string } }) {
-  await requireUser();
+  await requireUserApi();
   const merchant = await getCurrentMerchant();
   if (!merchant) return NextResponse.json({ error: "no merchant" }, { status: 400 });
   const supabase = getServerSupabase();

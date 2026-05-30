@@ -3,6 +3,8 @@ import { handleRouteError } from "@/lib/api/route-handler";
 import { MoyasarWebhookEventSchema } from "@/lib/moyasar/types";
 import { verifyMoyasarWebhook } from "@/lib/moyasar/webhook";
 import { handleMoyasarWebhookPayment } from "@/lib/billing/service";
+import { getServiceSupabase } from "@/lib/db/supabase";
+import { claimWebhookEvent } from "@/lib/webhooks/idempotency";
 
 export const runtime = "nodejs";
 
@@ -17,6 +19,11 @@ export async function POST(req: NextRequest) {
     }
 
     const event = MoyasarWebhookEventSchema.parse(JSON.parse(raw));
+    const supabase = getServiceSupabase();
+    const claim = await claimWebhookEvent(supabase, "moyasar", event.id);
+    if (claim === "duplicate") {
+      return NextResponse.json({ ok: true, duplicate: true });
+    }
 
     if (event.type === "payment_paid" || event.type === "payment_captured") {
       await handleMoyasarWebhookPayment(event.data.id);

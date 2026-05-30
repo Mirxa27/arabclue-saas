@@ -1,12 +1,19 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Field, Input } from "@/components/ui/primitives";
-import { getBrowserSupabase } from "@/lib/db/supabase-browser";
 import Link from "next/link";
 
-export default function SignupPage() {
+function SignupForm() {
+  const searchParams = useSearchParams();
+  const nextPath = useMemo(() => {
+    const next = searchParams.get("next");
+    if (!next || !next.startsWith("/") || next.startsWith("//")) return null;
+    return next;
+  }, [searchParams]);
+  const loginHref = nextPath ? `/login?next=${encodeURIComponent(nextPath)}` : "/login";
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
   const [state, setState] = useState<"idle" | "sending" | "sent" | "error">("idle");
@@ -16,16 +23,18 @@ export default function SignupPage() {
     e.preventDefault();
     setState("sending");
     setError(null);
-    const sb = getBrowserSupabase();
-    const { error } = await sb.auth.signInWithOtp({
-      email,
-      options: {
-        data: { full_name: name },
-        emailRedirectTo: `${window.location.origin}/welcome`
-      }
+    const res = await fetch("/api/auth/otp", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email, mode: "signup", name })
     });
-    if (error) { setError(error.message); setState("error"); }
-    else setState("sent");
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      setError(data.error ?? "Could not send verification link");
+      setState("error");
+    } else {
+      setState("sent");
+    }
   }
 
   return (
@@ -52,8 +61,19 @@ export default function SignupPage() {
 
       <div className="rule my-10" />
       <p className="text-sm text-ink-soft text-center">
-        Already have an account? <Link href="/login" className="underline underline-offset-4 hover:text-ink">Sign in</Link>
+        Already have an account?{" "}
+        <Link href={loginHref} className="underline underline-offset-4 hover:text-ink">
+          Sign in
+        </Link>
       </p>
     </div>
+  );
+}
+
+export default function SignupPage() {
+  return (
+    <Suspense fallback={<div className="text-sm text-ink-mute">Loading…</div>}>
+      <SignupForm />
+    </Suspense>
   );
 }

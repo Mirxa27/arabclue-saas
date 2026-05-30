@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireUser, getCurrentMerchant } from "@/lib/auth/session";
+import { requireUserApi, getCurrentMerchant } from "@/lib/auth/session";
 import { getServerSupabase } from "@/lib/db/supabase";
 import { sallaAPI } from "@/lib/salla/oauth";
 import { handleRouteError } from "@/lib/api/route-handler";
@@ -10,7 +10,7 @@ export const maxDuration = 120;
 
 export async function POST(_req: NextRequest) {
   try {
-    await requireUser();
+    await requireUserApi();
     const merchant = await getCurrentMerchant();
     if (!merchant?.access_token) {
       return NextResponse.json({ error: "salla not connected" }, { status: 400 });

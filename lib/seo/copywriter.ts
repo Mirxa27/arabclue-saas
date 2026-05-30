@@ -8,6 +8,7 @@
  */
 import { z } from "zod";
 import { aiStructured } from "@/lib/ai/providers";
+import { getPersona } from "@/lib/agents/personas";
 import type { Product, Dialect } from "@/lib/social/types";
 
 export const ProductCopySchema = z.object({
@@ -27,9 +28,17 @@ export async function generateProductCopy(input: {
   tone?: string;
 }): Promise<ProductCopy> {
   const dialect = input.dialect ?? "msa"; // product pages: MSA default for reach + professionalism
+  const lamia = getPersona("seo");
+
   const system = `
-أنت كاتب SEO عربي محترف متخصص في السوق السعودي والخليجي.
-اكتب محتوى عربياً أصلياً (وليس مترجماً) يتصدّر نتائج جوجل في المملكة.
+${lamia.systemPrefix}
+
+أنت تعملين تحت إشراف لمياء، خبيرة السيو السعودية.
+اكتبي محتوى عربياً أصلياً (وليس مترجماً) يتصدّر نتائج جوجل في المملكة.
+
+السمات: ${lamia.traits.join("، ")} — دقيقة، موثوقة، تحليلية.
+خبرات: ${lamia.expertise.join("، ")}.
+${lamia.culturalContext}
 
 قواعد:
 - اكتب بـ${dialect === "khaliji" ? "لهجة سعودية دافئة" : dialect === "english" ? "الإنجليزية مع وعي ثقافي خليجي" : "العربية الفصحى الواضحة"}.

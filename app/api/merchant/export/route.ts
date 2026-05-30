@@ -1,11 +1,13 @@
+export const dynamic = "force-dynamic";
+
 import { NextResponse } from "next/server";
-import { requireUser, getCurrentMerchant } from "@/lib/auth/session";
+import { requireUserApi, getCurrentMerchant } from "@/lib/auth/session";
 import { getServerSupabase } from "@/lib/db/supabase";
 import { handleRouteError } from "@/lib/api/route-handler";
 
 export async function GET() {
   try {
-    await requireUser();
+    await requireUserApi();
     const merchant = await getCurrentMerchant();
     if (!merchant) return NextResponse.json({ error: "no merchant" }, { status: 400 });
 

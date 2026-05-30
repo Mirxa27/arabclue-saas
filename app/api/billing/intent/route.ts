@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { requireUser, getCurrentMerchant } from "@/lib/auth/session";
+import { requireUserApi, getCurrentMerchant } from "@/lib/auth/session";
 import { handleRouteError } from "@/lib/api/route-handler";
 import { createBillingIntent } from "@/lib/billing/service";
 import { getPlan, type BillingPlan } from "@/lib/billing/plans";
 import { getPublishableKey } from "@/lib/moyasar/client";
+import { enforceRateLimit } from "@/lib/security/rate-limit";
 
 const BodySchema = z.object({
   plan: z.enum(["lite", "plus", "pro"])
@@ -12,9 +13,12 @@ const BodySchema = z.object({
 
 export async function POST(req: NextRequest) {
   try {
-    await requireUser();
+    await requireUserApi();
     const merchant = await getCurrentMerchant();
     if (!merchant) return NextResponse.json({ error: "no merchant" }, { status: 400 });
+
+    const limited = await enforceRateLimit(req, "billing:intent", 10, 60_000, merchant.id);
+    if (limited instanceof NextResponse) return limited;
 
     const body = BodySchema.parse(await req.json());
     const plan = body.plan as BillingPlan;

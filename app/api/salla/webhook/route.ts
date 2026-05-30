@@ -2,9 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { SallaWebhookEventSchema, verifySallaWebhook } from "@/lib/salla/oauth";
 import { generateInvoice } from "@/lib/zatca/invoice";
-import { getServerSupabase } from "@/lib/db/supabase";
+import { getServiceSupabase } from "@/lib/db/supabase";
 import { handleRouteError } from "@/lib/api/route-handler";
 import { SallaOrderCreatedEventSchema } from "@/lib/types/salla";
+import { claimWebhookEvent, sallaWebhookEventId } from "@/lib/webhooks/idempotency";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Merchant, SellerAddress } from "@/lib/types/database";
 
@@ -20,7 +21,12 @@ export async function POST(req: NextRequest) {
     }
 
     const evt = SallaWebhookEventSchema.parse(JSON.parse(raw));
-    const supabase = getServerSupabase();
+    const supabase = getServiceSupabase();
+    const eventId = sallaWebhookEventId(raw, evt);
+    const claim = await claimWebhookEvent(supabase, "salla", eventId);
+    if (claim === "duplicate") {
+      return NextResponse.json({ ok: true, duplicate: true });
+    }
 
     switch (evt.event) {
       case "order.created":
