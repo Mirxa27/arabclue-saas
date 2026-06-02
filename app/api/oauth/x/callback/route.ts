@@ -20,7 +20,7 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const verifier = cookies().get(PKCE_COOKIE)?.value;
+    const verifier = (await cookies()).get(PKCE_COOKIE)?.value;
     if (!verifier) throw new Error("Missing PKCE verifier");
 
     const state = verifyOAuthState(stateRaw);

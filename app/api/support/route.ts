@@ -26,7 +26,7 @@ export async function POST(request: Request) {
     // Store in support_tickets table if available, otherwise log
     // This ensures the endpoint works even before the migration runs
     const { getServerSupabase } = await import("@/lib/db/supabase");
-    const supabase = getServerSupabase();
+    const supabase = await getServerSupabase();
 
     const { error } = await supabase.from("support_tickets").insert({
       merchant_id: merchant?.id ?? null,

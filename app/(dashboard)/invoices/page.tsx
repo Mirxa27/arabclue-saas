@@ -17,7 +17,7 @@ const STATUS_TONES: Record<string, "success" | "danger" | "warn" | "default"> = 
 
 export default async function InvoicesPage() {
   const merchant = await getCurrentMerchant();
-  const supabase = getServerSupabase();
+  const supabase = await getServerSupabase();
 
   const { data: invoices } = merchant
     ? await supabase

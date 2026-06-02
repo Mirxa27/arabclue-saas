@@ -15,7 +15,7 @@ export async function POST(_req: NextRequest) {
   const merchant = await getCurrentMerchant();
   if (!merchant) return NextResponse.json({ error: "no merchant" }, { status: 400 });
 
-  const supabase = getServerSupabase();
+  const supabase = await getServerSupabase();
   const { data: kit } = await supabase.from("brand_kits").select("*").eq("merchant_id", merchant.id).maybeSingle();
   const { data: vc } = await supabase.from("voice_configs").select("*").eq("merchant_id", merchant.id).maybeSingle();
 

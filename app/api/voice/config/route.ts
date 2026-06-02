@@ -31,7 +31,7 @@ export async function POST(req: NextRequest) {
     }
 
     const body = Schema.parse(await req.json());
-    const supabase = getServerSupabase();
+    const supabase = await getServerSupabase();
     const { error } = await supabase.from("voice_configs").upsert({
       merchant_id: merchant.id,
       ...body,

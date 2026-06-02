@@ -42,7 +42,7 @@ export async function POST(req: NextRequest) {
     }
 
     const body = RequestSchema.parse(await req.json());
-    const supabase = getServerSupabase();
+    const supabase = await getServerSupabase();
 
     if (body.kind === "product") {
       const { data: row } = await supabase

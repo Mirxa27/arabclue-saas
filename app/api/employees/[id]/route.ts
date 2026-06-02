@@ -30,7 +30,7 @@ const UpdateSchema = z.object({
 
 async function fetchEmployeeOwned(id: string): Promise<AIEmployeeRow> {
   const merchant = await requireMerchant();
-  const sb = getServerSupabase();
+  const sb = await getServerSupabase();
   const { data, error } = await sb
     .from("ai_employees")
     .select("*")
@@ -42,10 +42,10 @@ async function fetchEmployeeOwned(id: string): Promise<AIEmployeeRow> {
 }
 
 // ── GET /api/employees/:id ───────────────────────────────────────────────
-export async function GET(_req: NextRequest, ctx: { params: { id: string } }): Promise<NextResponse> {
+export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string }> }): Promise<NextResponse> {
   try {
-    const employee = await fetchEmployeeOwned(ctx.params.id);
-    const sb = getServerSupabase();
+    const employee = await fetchEmployeeOwned((await ctx.params).id);
+    const sb = await getServerSupabase();
     const [integrations, tasks, conversations, heartbeat, actions] = await Promise.all([
       sb.from("ai_employee_integrations").select("*").eq("employee_id", employee.id),
       sb
@@ -85,12 +85,12 @@ export async function GET(_req: NextRequest, ctx: { params: { id: string } }): P
 }
 
 // ── PATCH /api/employees/:id ─────────────────────────────────────────────
-export async function PATCH(req: NextRequest, ctx: { params: { id: string } }): Promise<NextResponse> {
+export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: string }> }): Promise<NextResponse> {
   try {
-    const employee = await fetchEmployeeOwned(ctx.params.id);
+    const employee = await fetchEmployeeOwned((await ctx.params).id);
     const updates = UpdateSchema.parse(await req.json());
 
-    const sb = getServerSupabase();
+    const sb = await getServerSupabase();
     const patch: Record<string, unknown> = { ...updates };
     if (updates.status === "paused") patch.paused_at = new Date().toISOString();
     if (updates.status === "active") patch.paused_at = null;
@@ -110,10 +110,10 @@ export async function PATCH(req: NextRequest, ctx: { params: { id: string } }): 
 }
 
 // ── DELETE /api/employees/:id (off-boarding) ─────────────────────────────
-export async function DELETE(_req: NextRequest, ctx: { params: { id: string } }): Promise<NextResponse> {
+export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ id: string }> }): Promise<NextResponse> {
   try {
-    const employee = await fetchEmployeeOwned(ctx.params.id);
-    const sb = getServerSupabase();
+    const employee = await fetchEmployeeOwned((await ctx.params).id);
+    const sb = await getServerSupabase();
     await sb
       .from("ai_employees")
       .update({ status: "offboarded", offboarded_at: new Date().toISOString() })

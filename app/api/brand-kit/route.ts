@@ -19,7 +19,7 @@ export async function POST(req: NextRequest) {
   const merchant = await getCurrentMerchant();
   if (!merchant) return NextResponse.json({ error: "no merchant" }, { status: 400 });
   const body = Schema.parse(await req.json());
-  const supabase = getServerSupabase();
+  const supabase = await getServerSupabase();
   const { error } = await supabase
     .from("brand_kits")
     .upsert({ ...body, merchant_id: merchant.id, updated_at: new Date().toISOString() }, { onConflict: "merchant_id" });
@@ -31,7 +31,7 @@ export async function GET() {
   await requireUserApi();
   const merchant = await getCurrentMerchant();
   if (!merchant) return NextResponse.json({ kit: null });
-  const supabase = getServerSupabase();
+  const supabase = await getServerSupabase();
   const { data } = await supabase.from("brand_kits").select("*").eq("merchant_id", merchant.id).maybeSingle();
   return NextResponse.json({ kit: data });
 }

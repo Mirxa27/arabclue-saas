@@ -4,7 +4,8 @@ import { enrichCR } from "@/lib/wathq/client";
 import { handleRouteError } from "@/lib/api/route-handler";
 import { merchantCanUseFeature, featureGateMessage } from "@/lib/billing/entitlements";
 
-export async function GET(_req: NextRequest, { params }: { params: { cr: string } }) {
+export async function GET(_req: NextRequest, props: { params: Promise<{ cr: string }> }) {
+  const params = await props.params;
   try {
     await requireUserApi();
     const merchant = await getCurrentMerchant();

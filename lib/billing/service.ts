@@ -19,7 +19,7 @@ export type BillingPaymentRow = {
 
 export async function createBillingIntent(merchantId: string, plan: BillingPlan) {
   const planDef = getPlan(plan);
-  const supabase = getServerSupabase();
+  const supabase = await getServerSupabase();
   const givenId = crypto.randomUUID();
 
   const { data, error } = await supabase
@@ -52,11 +52,11 @@ export async function activateSubscription(args: {
   moyasarPaymentId: string;
   paymentPayload: unknown;
 }) {
-  return activateSubscriptionWithClient(getServerSupabase(), args);
+  return activateSubscriptionWithClient(await getServerSupabase(), args);
 }
 
 async function activateSubscriptionWithClient(
-  supabase: ReturnType<typeof getServerSupabase>,
+  supabase: Awaited<ReturnType<typeof getServerSupabase>>,
   args: {
     merchantId: string;
     plan: MerchantPlan;
@@ -96,11 +96,11 @@ export async function confirmBillingPayment(args: {
   moyasarPaymentId: string;
   intentId: string;
 }) {
-  return confirmBillingPaymentWithClient(getServerSupabase(), args);
+  return confirmBillingPaymentWithClient(await getServerSupabase(), args);
 }
 
 async function confirmBillingPaymentWithClient(
-  supabase: ReturnType<typeof getServerSupabase>,
+  supabase: Awaited<ReturnType<typeof getServerSupabase>>,
   args: {
     merchantId: string;
     moyasarPaymentId: string;

@@ -16,7 +16,7 @@ export async function POST(req: NextRequest) {
     if (!merchant) return NextResponse.json({ error: "no merchant" }, { status: 400 });
 
     const body = BodySchema.parse(await req.json());
-    const supabase = getServerSupabase();
+    const supabase = await getServerSupabase();
     await disconnectSocialChannel(supabase, merchant.id, body.platform);
     return NextResponse.json({ ok: true, platform: body.platform });
   } catch (err) {

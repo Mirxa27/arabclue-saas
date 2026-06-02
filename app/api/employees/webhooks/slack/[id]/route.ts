@@ -10,13 +10,13 @@ import { enforceRateLimit } from "@/lib/security/rate-limit";
 
 export const dynamic = "force-dynamic";
 
-export async function POST(req: NextRequest, ctx: { params: { id: string } }): Promise<NextResponse> {
+export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }): Promise<NextResponse> {
   try {
-    const limited = await enforceRateLimit(req, "employees:webhook:slack", 180, 60_000, ctx.params.id);
+    const limited = await enforceRateLimit(req, "employees:webhook:slack", 180, 60_000, (await ctx.params).id);
     if (limited instanceof NextResponse) return limited;
 
     const raw = await req.text();
-    const integration = await loadEmployeeIntegration(ctx.params.id, "slack");
+    const integration = await loadEmployeeIntegration((await ctx.params).id, "slack");
     if (!integration) return NextResponse.json({ error: "no slack integration" }, { status: 404 });
 
     const signingSecret =
@@ -44,7 +44,7 @@ export async function POST(req: NextRequest, ctx: { params: { id: string } }): P
 
     const externalId = incoming.user ? `${incoming.channel}:${incoming.user}` : incoming.channel;
     await handleInboundMessage({
-      employeeId: ctx.params.id,
+      employeeId: (await ctx.params).id,
       channel: "slack",
       externalId,
       text: incoming.text,

@@ -18,7 +18,7 @@ export type EmployeeBillingPaymentRow = {
 };
 
 export async function createEmployeeBillingIntent(merchantId: string, employeeId: string) {
-  const sb = getServerSupabase();
+  const sb = await getServerSupabase();
   const { data: employee, error: empErr } = await sb
     .from("ai_employees")
     .select("*")
@@ -62,11 +62,11 @@ export async function confirmEmployeeBillingPayment(args: {
   moyasarPaymentId: string;
   intentId: string;
 }) {
-  return confirmEmployeeBillingWithClient(getServerSupabase(), args);
+  return confirmEmployeeBillingWithClient(await getServerSupabase(), args);
 }
 
 async function confirmEmployeeBillingWithClient(
-  supabase: ReturnType<typeof getServerSupabase>,
+  supabase: Awaited<ReturnType<typeof getServerSupabase>>,
   args: { merchantId: string; moyasarPaymentId: string; intentId: string }
 ) {
   const { data: intent, error } = await supabase

@@ -35,9 +35,10 @@ const STATUS_COLORS: Record<string, string> = {
   failed: "text-red-400",
 };
 
-export default async function InvoiceDetailPage({ params }: { params: { id: string } }) {
+export default async function InvoiceDetailPage(props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const merchant = await getCurrentMerchant();
-  const supabase = getServerSupabase();
+  const supabase = await getServerSupabase();
 
   if (!merchant) return notFound();
 

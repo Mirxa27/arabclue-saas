@@ -3,7 +3,8 @@ import { EmployeeWorkspaceClient } from "@/components/employees/employee-workspa
 
 export const dynamic = "force-dynamic";
 
-export default function EmployeeDetailPage({ params }: { params: { id: string } }) {
+export default async function EmployeeDetailPage(props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   return (
     <Suspense fallback={<div className="p-8 text-sm text-ink-mute">Loading workspace…</div>}>
       <EmployeeWorkspaceClient employeeId={params.id} />

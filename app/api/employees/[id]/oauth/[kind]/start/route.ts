@@ -29,23 +29,23 @@ function callbackUrl(req: NextRequest): string {
 
 export async function GET(
   req: NextRequest,
-  ctx: { params: { id: string; kind: string } }
+  ctx: { params: Promise<{ id: string; kind: string }> }
 ): Promise<NextResponse | Response> {
   try {
     const limited = await enforceRateLimit(req, "employees:oauth:start", 20, 60_000);
     if (limited instanceof NextResponse) return limited;
 
     const merchant = await requireMerchant();
-    const sb = getServerSupabase();
+    const sb = await getServerSupabase();
     const { data: emp, error } = await sb
       .from("ai_employees")
       .select("id, merchant_id")
-      .eq("id", ctx.params.id)
+      .eq("id", (await ctx.params).id)
       .eq("merchant_id", merchant.id)
       .single();
     if (error || !emp) return NextResponse.json({ error: "Employee not found" }, { status: 404 });
 
-    const kind = ctx.params.kind as IntegrationKind;
+    const kind = (await ctx.params).kind as IntegrationKind;
     const provider = getOAuthProvider(kind);
     if (!provider) {
       return NextResponse.json({ error: `Unknown OAuth provider: ${kind}` }, { status: 400 });

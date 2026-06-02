@@ -28,7 +28,7 @@ export async function POST(req: NextRequest) {
     }
 
     const body = BodySchema.parse(await req.json());
-    const supabase = getServerSupabase();
+    const supabase = await getServerSupabase();
     await upsertSocialChannel(supabase, merchant.id, body.platform, {
       externalId: body.externalId,
       accessToken: body.accessToken

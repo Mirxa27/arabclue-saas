@@ -28,7 +28,8 @@ export async function generateStaticParams() {
   return EMPLOYEE_CATALOG.map((r) => ({ slug: r.slug }));
 }
 
-export default async function MarketplaceRolePage({ params }: { params: { slug: string } }) {
+export default async function MarketplaceRolePage(props: { params: Promise<{ slug: string }> }) {
+  const params = await props.params;
   const role = getRoleBySlug(params.slug);
   if (!role) notFound();
 
