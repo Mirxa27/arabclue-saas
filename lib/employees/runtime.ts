@@ -26,10 +26,7 @@ import type {
   IntegrationKind
 } from "./types";
 import { decryptIntegrationCredentials } from "./credentials";
-import { sendWhatsAppText, type WhatsAppCredentials } from "./channels/whatsapp";
-import { sendTelegramText, type TelegramCredentials } from "./channels/telegram";
-import { sendSlackMessage, type SlackCredentials } from "./channels/slack";
-import { sendEmail, type EmailCredentials, type EmailMessage } from "./channels/email";
+import { dispatchChannelSend } from "./channels/dispatch";
 
 const MAX_CONTEXT_TURNS = 20;
 
@@ -375,73 +372,27 @@ export async function sendOnChannel(args: {
   const integration = integrations.find((i) => i.kind === args.kind);
   if (!integration) throw new Error(`Integration ${args.kind} not connected`);
 
-  switch (args.kind) {
-    case "whatsapp": {
-      const creds = integration.credentials as unknown as WhatsAppCredentials;
-      const res = await sendWhatsAppText(creds, args.to, args.body);
-      await logAction({
-        employeeId: args.employeeId,
-        action: "send_message",
-        channel: "whatsapp",
-        target: args.to,
-        payload: { body: args.body.slice(0, 200) },
-        result: { remoteId: res.remoteId },
-        status: "success"
-      });
-      return res;
-    }
-    case "telegram": {
-      const creds = integration.credentials as unknown as TelegramCredentials;
-      const res = await sendTelegramText(creds, args.to, args.body);
-      await logAction({
-        employeeId: args.employeeId,
-        action: "send_message",
-        channel: "telegram",
-        target: args.to,
-        payload: { body: args.body.slice(0, 200) },
-        result: { remoteId: String(res.remoteId) },
-        status: "success"
-      });
-      return { remoteId: String(res.remoteId) };
-    }
-    case "slack": {
-      const creds = integration.credentials as unknown as SlackCredentials;
-      const channel = args.to || creds.default_channel || "#general";
-      const res = await sendSlackMessage(creds, channel, args.body);
-      await logAction({
-        employeeId: args.employeeId,
-        action: "send_message",
-        channel: "slack",
-        target: channel,
-        payload: { body: args.body.slice(0, 200) },
-        result: { ts: res.ts },
-        status: "success"
-      });
-      return { remoteId: res.ts };
-    }
-    case "email":
-    case "gmail": {
-      const creds = integration.credentials as unknown as EmailCredentials;
-      const msg: EmailMessage = {
-        to: args.to,
-        subject: args.subject ?? "Message from your team",
-        text: args.body
-      };
-      const res = await sendEmail(creds, msg);
-      await logAction({
-        employeeId: args.employeeId,
-        action: "send_message",
-        channel: args.kind,
-        target: args.to,
-        payload: { subject: msg.subject, body: args.body.slice(0, 200) },
-        result: { id: res.id },
-        status: "success"
-      });
-      return { remoteId: res.id };
-    }
-    default:
-      throw new Error(`Channel ${args.kind} send not implemented in this build`);
-  }
+  // Channel matrix lives in channels/dispatch.ts. A failed send throws and is
+  // logged by the caller (e.g. handleInboundMessage); we record only success here.
+  const { remoteId } = await dispatchChannelSend({
+    kind: args.kind,
+    credentials: integration.credentials ?? {},
+    to: args.to,
+    body: args.body,
+    subject: args.subject
+  });
+
+  await logAction({
+    employeeId: args.employeeId,
+    action: "send_message",
+    channel: args.kind,
+    target: args.to,
+    payload: { subject: args.subject, body: args.body.slice(0, 200) },
+    result: { remoteId },
+    status: "success"
+  });
+
+  return { remoteId };
 }
 
 // ─── 24/7 tick: advance tasks + send greetings ────────────────────────────

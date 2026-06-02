@@ -17,10 +17,7 @@ import type {
   AIEmployeeRow,
   IntegrationKind
 } from "./types";
-import { sendWhatsAppText } from "./channels/whatsapp";
-import { sendTelegramText } from "./channels/telegram";
-import { sendSlackMessage } from "./channels/slack";
-import { sendEmail } from "./channels/email";
+import { dispatchChannelSend, MESSAGING_CHANNELS } from "./channels/dispatch";
 
 // ─── tool schema ───────────────────────────────────────────────────────────
 
@@ -44,9 +41,7 @@ export const ToolDecisionSchema = z.object({
   task_description: z.string().max(1000).optional(),
   task_priority: z.enum(["low", "normal", "high", "urgent"]).optional(),
   task_due_in_hours: z.number().int().min(1).max(720).optional(),
-  channel: z
-    .enum(["whatsapp", "telegram", "slack", "email", "gmail"] as const)
-    .optional(),
+  channel: z.enum(MESSAGING_CHANNELS).optional(),
   to: z.string().max(200).optional(),
   subject: z.string().max(200).optional(),
   body: z.string().max(4000).optional(),
@@ -173,31 +168,14 @@ async function execSendMessage(
   if (!integ) {
     return { ok: false, tool: "send_message", error: `${d.channel} not connected` };
   }
-  switch (d.channel) {
-    case "whatsapp": {
-      const res = await sendWhatsAppText(integ.credentials as never, d.to, d.body);
-      return { ok: true, tool: "send_message", output: { remote_id: res.remoteId } };
-    }
-    case "telegram": {
-      const res = await sendTelegramText(integ.credentials as never, d.to, d.body);
-      return { ok: true, tool: "send_message", output: { remote_id: String(res.remoteId) } };
-    }
-    case "slack": {
-      const res = await sendSlackMessage(integ.credentials as never, d.to, d.body);
-      return { ok: true, tool: "send_message", output: { ts: res.ts } };
-    }
-    case "email":
-    case "gmail": {
-      const creds = integ.credentials as { from?: string; api_key?: string };
-      const res = await sendEmail(
-        { from: creds.from ?? "noreply@arabclue.com", api_key: creds.api_key },
-        { to: d.to, subject: d.subject ?? "(no subject)", text: d.body }
-      );
-      return { ok: true, tool: "send_message", output: { id: res.id } };
-    }
-    default:
-      return { ok: false, tool: "send_message", error: `unsupported channel ${d.channel}` };
-  }
+  const { remoteId } = await dispatchChannelSend({
+    kind: d.channel,
+    credentials: integ.credentials ?? {},
+    to: d.to,
+    body: d.body,
+    subject: d.subject
+  });
+  return { ok: true, tool: "send_message", output: { remote_id: remoteId } };
 }
 
 async function execScheduleFollowup(
