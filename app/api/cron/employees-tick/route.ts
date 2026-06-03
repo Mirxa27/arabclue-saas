@@ -11,6 +11,7 @@
  */
 import { NextResponse, type NextRequest } from "next/server";
 import { getServiceSupabase } from "@/lib/db/supabase";
+import { assertCronAuthorized } from "@/lib/security/cron";
 import { enforceEmployeeBillingCycle } from "@/lib/employees/billing-cycle";
 import { tick } from "@/lib/employees/runtime";
 import type { AIEmployeeRow } from "@/lib/employees/types";
@@ -21,20 +22,6 @@ export const maxDuration = 60;
 
 const BATCH_SIZE = 50;
 
-function unauthorized(): NextResponse {
-  return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-}
-
-function isAuthorized(req: NextRequest): boolean {
-  const want = process.env.CRON_SECRET;
-  if (!want) return true; // dev only
-  const got =
-    req.headers.get("authorization")?.replace(/^Bearer\s+/i, "") ??
-    req.headers.get("x-cron-secret") ??
-    new URL(req.url).searchParams.get("secret");
-  return got === want;
-}
-
 export async function GET(req: NextRequest): Promise<NextResponse> {
   return run(req);
 }
@@ -43,7 +30,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 }
 
 async function run(req: NextRequest): Promise<NextResponse> {
-  if (!isAuthorized(req)) return unauthorized();
+  const denied = assertCronAuthorized(req);
+  if (denied) return denied;
 
   const billing = await enforceEmployeeBillingCycle();
 
