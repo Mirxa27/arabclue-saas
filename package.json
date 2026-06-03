@@ -17,10 +17,10 @@
   "dependencies": {
     "@supabase/ssr": "^0.5.0",
     "@supabase/supabase-js": "^2.45.0",
-    "ai": "^3.4.0",
-    "@ai-sdk/openai": "^0.0.66",
-    "@ai-sdk/anthropic": "^0.0.50",
-    "zod": "^3.23.8",
+    "ai": "^6.0.195",
+    "@ai-sdk/openai": "^3.0.67",
+    "@ai-sdk/anthropic": "^3.0.81",
+    "zod": "^3.25.76",
     "next": "15.5.19",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
@@ -38,11 +38,18 @@
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
     "autoprefixer": "^10.4.20",
-    "postcss": "^8.4.47",
+    "postcss": "^8.5.15",
     "tailwindcss": "^3.4.13",
     "typescript": "^5.6.0",
     "vitest": "^4.1.8",
     "eslint": "^8.57.1",
     "eslint-config-next": "15.5.19"
+  },
+  "overrides": {
+    "nanoid": "^3.3.8",
+    "postcss": "^8.5.15",
+    "xmlbuilder2": {
+      "js-yaml": "^3.14.2"
+    }
   }
 }
