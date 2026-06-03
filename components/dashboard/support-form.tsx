@@ -79,7 +79,7 @@ export function SupportForm({ className }: { className?: string }) {
         type="button"
         onClick={() => setOpen(true)}
         className={cn(
-          "fixed bottom-6 end-6 z-50 flex items-center gap-2 px-4 h-11 rounded-2xl",
+          "fixed bottom-[calc(5.5rem+var(--safe-bottom))] lg:bottom-6 end-6 z-50 flex items-center gap-2 px-4 h-11 rounded-2xl",
           "bg-accent text-white shadow-glass-lg hover:bg-accent/90",
           "active:scale-95 transition-all duration-300 touch-target",
           className,
@@ -95,7 +95,7 @@ export function SupportForm({ className }: { className?: string }) {
   return (
     <div
       className={cn(
-        "fixed bottom-6 end-6 z-50 w-[360px] max-w-[calc(100vw-2rem)]",
+        "fixed bottom-[calc(5.5rem+var(--safe-bottom))] lg:bottom-6 end-6 z-50 w-[360px] max-w-[calc(100vw-2rem)]",
         "rounded-2xl border border-rule/50 bg-paper/98 backdrop-blur-2xl shadow-glass-xl",
         "animate-scale-in origin-bottom-right overflow-hidden",
         className,

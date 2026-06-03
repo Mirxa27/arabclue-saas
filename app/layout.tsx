@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { ToastProvider } from "@/components/ui/toast";
 import { ClientErrorReporter } from "@/components/observability/client-error-reporter";
 import "./globals.css";
@@ -31,6 +31,20 @@ export const metadata: Metadata = {
   alternates: {
     languages: { "en-US": "/", "ar-SA": "/ar" }
   }
+};
+
+// Activates env(safe-area-inset-*) on notched devices (the CSS already consumes
+// the --safe-* vars) and matches the browser chrome + native controls to the
+// app's light/dark palette. Zoom is intentionally NOT disabled (accessibility).
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
+  colorScheme: "light dark",
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#F5EFE6" },
+    { media: "(prefers-color-scheme: dark)", color: "#1A1816" }
+  ]
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
