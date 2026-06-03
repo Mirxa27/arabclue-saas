@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getCurrentMerchant } from "@/lib/auth/session";
+import { sendSupportAck } from "@/lib/support/notify";
 
 const SupportBodySchema = z.object({
   category: z.enum(["help", "bug", "feature", "billing"]),
@@ -40,6 +41,20 @@ export async function POST(request: Request) {
       // Table might not exist yet — log and return success anyway
       // so the user doesn't see an error while we're deploying the migration
       console.warn("[support] DB insert failed — table may not exist yet:", error.message);
+    }
+
+    // Auto-responder: acknowledge receipt. Best-effort — a missing email config
+    // must never fail the support submission itself.
+    const recipient = email ?? merchant?.email ?? null;
+    if (recipient) {
+      try {
+        await sendSupportAck({ to: recipient, category });
+      } catch (ackErr) {
+        console.warn(
+          "[support] auto-responder skipped:",
+          ackErr instanceof Error ? ackErr.message : String(ackErr)
+        );
+      }
     }
 
     return NextResponse.json({ success: true }, { status: 201 });
