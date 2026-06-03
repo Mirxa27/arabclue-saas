@@ -1,6 +1,15 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { verifyMetaWebhook } from "@/lib/meta/oauth";
 
+// Hoisted by vitest; declared at top level so its execution order is explicit (vitest 4).
+vi.mock("@/lib/social/agent", () => ({
+  engager: vi.fn().mockResolvedValue({
+    action: "escalate",
+    reason: "Refund request",
+    reply: undefined
+  })
+}));
+
 describe("meta webhook verify", () => {
   beforeEach(() => {
     process.env.META_WEBHOOK_VERIFY_TOKEN = "verify-me";
@@ -17,14 +26,6 @@ describe("meta webhook verify", () => {
 
 describe("processSocialInbound", () => {
   it("escalates to social.escalation event", async () => {
-    vi.mock("@/lib/social/agent", () => ({
-      engager: vi.fn().mockResolvedValue({
-        action: "escalate",
-        reason: "Refund request",
-        reply: undefined
-      })
-    }));
-
     const { processSocialInbound } = await import("@/lib/social/handover");
 
     const inserts: unknown[] = [];

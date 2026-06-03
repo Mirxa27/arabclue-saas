@@ -12,9 +12,10 @@ export const dynamic = "force-dynamic";
 
 type SearchParams = { q?: string; category?: string };
 
-export default async function MarketplacePage({ searchParams }: { searchParams: SearchParams }) {
+export default async function MarketplacePage(props: { searchParams: Promise<SearchParams> }) {
+  const searchParams = await props.searchParams;
   const merchant = await getCurrentMerchant();
-  const sb = getServerSupabase();
+  const sb = await getServerSupabase();
   const { data: hiredRows } = merchant
     ? await sb.from("ai_employees").select("role_id").eq("merchant_id", merchant.id)
     : { data: [] };

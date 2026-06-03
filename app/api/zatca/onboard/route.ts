@@ -27,7 +27,7 @@ export async function POST(req: NextRequest) {
   });
   const productionCSID = Buffer.from(`${production.binarySecurityToken}:${production.secret}`).toString("base64");
 
-  const supabase = getServerSupabase();
+  const supabase = await getServerSupabase();
   await supabase
     .from("merchants")
     .update({ zatca_csid: productionCSID, zatca_onboarded_at: new Date().toISOString() })

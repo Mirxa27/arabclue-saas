@@ -26,7 +26,7 @@ export async function POST(request: Request) {
 
     // Store in user_feedback table if available
     const { getServerSupabase } = await import("@/lib/db/supabase");
-    const supabase = getServerSupabase();
+    const supabase = await getServerSupabase();
 
     const { error } = await supabase.from("user_feedback").insert({
       merchant_id: merchant?.id ?? null,

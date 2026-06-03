@@ -16,7 +16,7 @@ export async function POST(_req: NextRequest) {
       return NextResponse.json({ error: "salla not connected" }, { status: 400 });
     }
 
-    const supabase = getServerSupabase();
+    const supabase = await getServerSupabase();
     let page = 1;
     let totalSynced = 0;
     const limit = 50;

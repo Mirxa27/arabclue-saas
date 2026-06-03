@@ -5,6 +5,7 @@ import { scheduler } from "@/lib/social/agent";
 import { buildConnectorsForMerchant } from "@/lib/social/connectors";
 import { getServiceSupabase } from "@/lib/db/supabase";
 import { handleRouteError } from "@/lib/api/route-handler";
+import { assertCronAuthorized } from "@/lib/security/cron";
 import { getAgentSettings } from "@/lib/admin/platform-settings";
 import type { ScheduledPost, SocialStore } from "@/lib/social/agent";
 import type { SocialPostStatus } from "@/lib/types/database";
@@ -44,9 +45,8 @@ export const maxDuration = 300;
 
 export async function GET(req: NextRequest) {
   try {
-    if (req.headers.get("authorization") !== `Bearer ${process.env.CRON_SECRET}`) {
-      return new NextResponse("unauthorized", { status: 401 });
-    }
+    const denied = assertCronAuthorized(req);
+    if (denied) return denied;
 
     const agents = await getAgentSettings();
     if (!agents.social.enabled) {

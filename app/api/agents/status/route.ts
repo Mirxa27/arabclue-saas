@@ -35,7 +35,7 @@ function shapePersona(p: AgentPersona) {
 export async function GET(_req: NextRequest): Promise<NextResponse> {
   try {
     const user = await requireUser();
-    const supabase = getServerSupabase();
+    const supabase = await getServerSupabase();
     const { data: merchant } = await supabase
       .from("merchants")
       .select("id")
@@ -111,7 +111,7 @@ const PatchBodySchema = z.object({
 export async function PATCH(req: NextRequest): Promise<NextResponse> {
   try {
     const user = await requireUser();
-    const supabase = getServerSupabase();
+    const supabase = await getServerSupabase();
     const { data: merchant } = await supabase
       .from("merchants")
       .select("id")

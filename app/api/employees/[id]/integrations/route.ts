@@ -56,7 +56,7 @@ const ConnectSchema = z.object({
 
 async function assertEmployeeOwned(id: string): Promise<string> {
   const merchant = await requireMerchant();
-  const sb = getServerSupabase();
+  const sb = await getServerSupabase();
   const { data, error } = await sb
     .from("ai_employees")
     .select("id")
@@ -68,10 +68,10 @@ async function assertEmployeeOwned(id: string): Promise<string> {
 }
 
 // GET /api/employees/:id/integrations
-export async function GET(_req: NextRequest, ctx: { params: { id: string } }): Promise<NextResponse> {
+export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string }> }): Promise<NextResponse> {
   try {
-    const employeeId = await assertEmployeeOwned(ctx.params.id);
-    const sb = getServerSupabase();
+    const employeeId = await assertEmployeeOwned((await ctx.params).id);
+    const sb = await getServerSupabase();
     const { data } = await sb
       .from("ai_employee_integrations")
       .select("id, employee_id, kind, external_id, config, status, last_event_at, created_at")
@@ -85,11 +85,11 @@ export async function GET(_req: NextRequest, ctx: { params: { id: string } }): P
 }
 
 // POST /api/employees/:id/integrations — connect/upsert
-export async function POST(req: NextRequest, ctx: { params: { id: string } }): Promise<NextResponse> {
+export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }): Promise<NextResponse> {
   try {
-    const employeeId = await assertEmployeeOwned(ctx.params.id);
+    const employeeId = await assertEmployeeOwned((await ctx.params).id);
     const body = ConnectSchema.parse(await req.json());
-    const sb = getServerSupabase();
+    const sb = await getServerSupabase();
 
     const baseUrl = process.env.APP_BASE_URL ?? process.env.NEXT_PUBLIC_APP_URL ?? "https://arabclue.com";
 
@@ -129,13 +129,13 @@ export async function POST(req: NextRequest, ctx: { params: { id: string } }): P
 }
 
 // DELETE /api/employees/:id/integrations?kind=... — disconnect
-export async function DELETE(req: NextRequest, ctx: { params: { id: string } }): Promise<NextResponse> {
+export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: string }> }): Promise<NextResponse> {
   try {
-    const employeeId = await assertEmployeeOwned(ctx.params.id);
+    const employeeId = await assertEmployeeOwned((await ctx.params).id);
     const url = new URL(req.url);
     const kind = url.searchParams.get("kind");
     if (!kind) return NextResponse.json({ error: "kind required" }, { status: 400 });
-    const sb = getServerSupabase();
+    const sb = await getServerSupabase();
     await sb.from("ai_employee_integrations").delete().eq("employee_id", employeeId).eq("kind", kind);
     return NextResponse.json({ ok: true });
   } catch (err) {

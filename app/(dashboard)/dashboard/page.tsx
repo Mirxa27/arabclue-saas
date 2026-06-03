@@ -153,7 +153,7 @@ function PlanCheck({ label }: { label: string }) {
 // ── Page ─────────────────────────────────────────────────────────
 export default async function DashboardPage() {
   const merchant = await getCurrentMerchant();
-  const supabase = getServerSupabase();
+  const supabase = await getServerSupabase();
 
   const [invoicesResp, postsResp, clearedResp] = await Promise.all([
     merchant

@@ -11,7 +11,7 @@ export async function GET() {
     const merchant = await getCurrentMerchant();
     if (!merchant) return NextResponse.json({ error: "no merchant" }, { status: 400 });
 
-    const supabase = getServerSupabase();
+    const supabase = await getServerSupabase();
     const merchantId = merchant.id;
 
     const [brandKit, invoices, products, posts, channels, voice, seo] = await Promise.all([

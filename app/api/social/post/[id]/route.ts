@@ -10,11 +10,12 @@ const PatchSchema = z.object({
   hook: z.string().optional()
 });
 
-export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
+export async function GET(_req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   await requireUserApi();
   const merchant = await getCurrentMerchant();
   if (!merchant) return NextResponse.json({ error: "no merchant" }, { status: 400 });
-  const supabase = getServerSupabase();
+  const supabase = await getServerSupabase();
   const { data, error } = await supabase
     .from("social_posts")
     .select("*")
@@ -25,12 +26,13 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
   return NextResponse.json(data);
 }
 
-export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
+export async function PATCH(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   await requireUserApi();
   const merchant = await getCurrentMerchant();
   if (!merchant) return NextResponse.json({ error: "no merchant" }, { status: 400 });
   const body = PatchSchema.parse(await req.json());
-  const supabase = getServerSupabase();
+  const supabase = await getServerSupabase();
   const { error } = await supabase
     .from("social_posts")
     .update({
@@ -45,11 +47,12 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   return NextResponse.json({ ok: true });
 }
 
-export async function DELETE(_req: NextRequest, { params }: { params: { id: string } }) {
+export async function DELETE(_req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   await requireUserApi();
   const merchant = await getCurrentMerchant();
   if (!merchant) return NextResponse.json({ error: "no merchant" }, { status: 400 });
-  const supabase = getServerSupabase();
+  const supabase = await getServerSupabase();
   await supabase.from("social_posts").delete().eq("id", params.id).eq("merchant_id", merchant.id);
   return NextResponse.json({ ok: true });
 }

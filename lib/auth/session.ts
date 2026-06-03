@@ -11,7 +11,7 @@ export class AuthError extends Error {
 }
 
 export async function getCurrentUser() {
-  const supabase = getServerSupabase();
+  const supabase = await getServerSupabase();
   const { data } = await supabase.auth.getUser();
   return data.user;
 }
@@ -33,7 +33,7 @@ export async function requireUserApi() {
 export async function getCurrentMerchant(): Promise<Merchant | null> {
   const user = await getCurrentUser();
   if (!user) return null;
-  const supabase = getServerSupabase();
+  const supabase = await getServerSupabase();
   const { data } = await supabase
     .from("merchants")
     .select("*")

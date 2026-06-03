@@ -34,7 +34,7 @@ const HireSchema = z.object({
 export async function GET(): Promise<NextResponse> {
   try {
     const merchant = await requireMerchant();
-    const sb = getServerSupabase();
+    const sb = await getServerSupabase();
     const { data, error } = await sb
       .from("ai_employees")
       .select("*")
@@ -61,7 +61,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     const role = getRole(body.role_id);
     if (!role) return NextResponse.json({ error: "Unknown role_id" }, { status: 400 });
 
-    const sb = getServerSupabase();
+    const sb = await getServerSupabase();
     const { count } = await sb
       .from("ai_employees")
       .select("id", { count: "exact", head: true })

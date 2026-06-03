@@ -10,12 +10,12 @@ import { enforceRateLimit } from "@/lib/security/rate-limit";
 
 export const dynamic = "force-dynamic";
 
-export async function POST(req: NextRequest, ctx: { params: { id: string } }): Promise<NextResponse> {
+export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }): Promise<NextResponse> {
   try {
-    const limited = await enforceRateLimit(req, "employees:webhook:telegram", 180, 60_000, ctx.params.id);
+    const limited = await enforceRateLimit(req, "employees:webhook:telegram", 180, 60_000, (await ctx.params).id);
     if (limited instanceof NextResponse) return limited;
 
-    const integration = await loadEmployeeIntegration(ctx.params.id, "telegram");
+    const integration = await loadEmployeeIntegration((await ctx.params).id, "telegram");
     if (!integration) return NextResponse.json({ error: "no telegram integration" }, { status: 404 });
 
     const expected = integration.credentials.webhook_secret as string | undefined;
@@ -29,7 +29,7 @@ export async function POST(req: NextRequest, ctx: { params: { id: string } }): P
     if (!incoming || !incoming.text) return NextResponse.json({ ok: true, skipped: true });
 
     await handleInboundMessage({
-      employeeId: ctx.params.id,
+      employeeId: (await ctx.params).id,
       channel: "telegram",
       externalId: String(incoming.chatId),
       text: incoming.text,

@@ -20,7 +20,7 @@ const StatusSchema = z.object({
 
 async function assertEmployeeOwnership(employeeId: string): Promise<void> {
   const merchant = await requireMerchant();
-  const sb = getServerSupabase();
+  const sb = await getServerSupabase();
   const { data, error } = await sb
     .from("ai_employees")
     .select("id")
@@ -32,10 +32,10 @@ async function assertEmployeeOwnership(employeeId: string): Promise<void> {
 
 export async function PATCH(
   req: NextRequest,
-  ctx: { params: { id: string } }
+  ctx: { params: Promise<{ id: string }> }
 ): Promise<NextResponse> {
   try {
-    await assertEmployeeOwnership(ctx.params.id);
+    await assertEmployeeOwnership((await ctx.params).id);
 
     const merchant = await requireMerchant();
     const limited = await enforceRateLimit(
@@ -49,14 +49,14 @@ export async function PATCH(
 
     const body = StatusSchema.parse(await req.json());
 
-    const sb = getServerSupabase();
+    const sb = await getServerSupabase();
     const { data, error } = await sb
       .from("ai_employees")
       .update({
         status: body.status,
         updated_at: new Date().toISOString(),
       })
-      .eq("id", ctx.params.id)
+      .eq("id", (await ctx.params).id)
       .select("id, status, display_name, role_id")
       .single();
 
@@ -64,7 +64,7 @@ export async function PATCH(
       throw new Error(error?.message ?? "Failed to update status");
 
     const label =
-      data.display_name ?? data.role_id ?? ctx.params.id;
+      data.display_name ?? data.role_id ?? (await ctx.params).id;
 
     return NextResponse.json({
       ...data,
@@ -75,7 +75,7 @@ export async function PATCH(
     });
   } catch (err) {
     return handleRouteError(err, {
-      route: `PATCH /api/employees/${ctx.params.id}/status`,
+      route: `PATCH /api/employees/${(await ctx.params).id}/status`,
     });
   }
 }

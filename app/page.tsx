@@ -1,11 +1,12 @@
 import { HomeLanding } from "@/components/marketing/home-landing";
 
 type PageProps = {
-  searchParams?: {
+  searchParams?: Promise<{
     lang?: string;
-  };
+  }>;
 };
 
-export default function Page({ searchParams }: PageProps) {
+export default async function Page(props: PageProps) {
+  const searchParams = await props.searchParams;
   return <HomeLanding initialLang={searchParams?.lang === "ar" ? "ar" : "en"} />;
 }

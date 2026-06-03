@@ -9,7 +9,7 @@ export async function POST() {
     const merchant = await getCurrentMerchant();
     if (!merchant) return NextResponse.json({ error: "no merchant" }, { status: 400 });
 
-    const supabase = getServerSupabase();
+    const supabase = await getServerSupabase();
     const { error } = await supabase
       .from("merchants")
       .update({

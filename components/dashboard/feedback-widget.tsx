@@ -87,7 +87,7 @@ export function FeedbackWidget({ className }: { className?: string }) {
     return (
       <div
         className={cn(
-          "fixed bottom-28 end-6 z-50 flex items-center gap-2 px-4 h-10 rounded-2xl",
+          "fixed bottom-[calc(9rem+var(--safe-bottom))] lg:bottom-28 end-6 z-50 flex items-center gap-2 px-4 h-10 rounded-2xl",
           "bg-emerald-500/10 border border-emerald-500/20 text-emerald-600",
           "text-xs font-medium animate-scale-in origin-bottom-right",
           className,
@@ -110,7 +110,7 @@ export function FeedbackWidget({ className }: { className?: string }) {
   return (
     <div
       className={cn(
-        "fixed bottom-28 end-6 z-50 max-w-[380px] w-[calc(100vw-2rem)]",
+        "fixed bottom-[calc(9rem+var(--safe-bottom))] lg:bottom-28 end-6 z-50 max-w-[380px] w-[calc(100vw-2rem)]",
         "rounded-2xl border border-rule/40 bg-paper/98 backdrop-blur-2xl shadow-glass-xl",
         "animate-scale-in origin-bottom-right overflow-hidden",
         className,

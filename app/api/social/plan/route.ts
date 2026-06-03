@@ -49,7 +49,7 @@ export async function POST(req: NextRequest) {
     }
 
     const body = RequestSchema.parse(await req.json());
-    const supabase = getServerSupabase();
+    const supabase = await getServerSupabase();
 
     const [{ data: kit }, { data: products }] = await Promise.all([
       supabase.from("brand_kits").select("*").eq("merchant_id", merchant.id).maybeSingle(),
@@ -108,7 +108,7 @@ export async function GET() {
     await requireUserApi();
     const merchant = await getCurrentMerchant();
     if (!merchant) return NextResponse.json({ posts: [] });
-    const supabase = getServerSupabase();
+    const supabase = await getServerSupabase();
     const { data } = await supabase
       .from("social_posts")
       .select("*")

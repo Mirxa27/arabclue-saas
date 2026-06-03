@@ -39,7 +39,7 @@ import { getServerSupabase } from "@/lib/db/supabase";
 const CACHE_TTL_DAYS = 14;
 
 export async function enrichCR(crNumber: string, apiKey: string): Promise<CRSummary | null> {
-  const supabase = getServerSupabase();
+  const supabase = await getServerSupabase();
   const cached = await supabase.from("wathq_cache").select("*").eq("cr_number", crNumber).single();
   if (cached.data) {
     const ageDays = (Date.now() - new Date(cached.data.fetched_at).getTime()) / 86_400_000;

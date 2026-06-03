@@ -23,7 +23,7 @@ const TaskUpdateSchema = z.object({
 
 async function assertEmployeeOwned(id: string): Promise<string> {
   const merchant = await requireMerchant();
-  const sb = getServerSupabase();
+  const sb = await getServerSupabase();
   const { data, error } = await sb
     .from("ai_employees")
     .select("id")
@@ -34,10 +34,10 @@ async function assertEmployeeOwned(id: string): Promise<string> {
   return data.id as string;
 }
 
-export async function GET(_req: NextRequest, ctx: { params: { id: string } }): Promise<NextResponse> {
+export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string }> }): Promise<NextResponse> {
   try {
-    const employeeId = await assertEmployeeOwned(ctx.params.id);
-    const sb = getServerSupabase();
+    const employeeId = await assertEmployeeOwned((await ctx.params).id);
+    const sb = await getServerSupabase();
     const { data } = await sb
       .from("ai_employee_tasks")
       .select("*")
@@ -49,11 +49,11 @@ export async function GET(_req: NextRequest, ctx: { params: { id: string } }): P
   }
 }
 
-export async function POST(req: NextRequest, ctx: { params: { id: string } }): Promise<NextResponse> {
+export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }): Promise<NextResponse> {
   try {
-    const employeeId = await assertEmployeeOwned(ctx.params.id);
+    const employeeId = await assertEmployeeOwned((await ctx.params).id);
     const body = TaskCreateSchema.parse(await req.json());
-    const sb = getServerSupabase();
+    const sb = await getServerSupabase();
     const { data, error } = await sb
       .from("ai_employee_tasks")
       .insert({
@@ -74,11 +74,11 @@ export async function POST(req: NextRequest, ctx: { params: { id: string } }): P
   }
 }
 
-export async function PATCH(req: NextRequest, ctx: { params: { id: string } }): Promise<NextResponse> {
+export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: string }> }): Promise<NextResponse> {
   try {
-    const employeeId = await assertEmployeeOwned(ctx.params.id);
+    const employeeId = await assertEmployeeOwned((await ctx.params).id);
     const body = TaskUpdateSchema.parse(await req.json());
-    const sb = getServerSupabase();
+    const sb = await getServerSupabase();
     const patch: Record<string, unknown> = { ...body };
     delete patch.id;
     if (body.status === "done") patch.completed_at = new Date().toISOString();

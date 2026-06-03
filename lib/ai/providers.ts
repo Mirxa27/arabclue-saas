@@ -47,7 +47,7 @@ export async function aiText(opts: AICallOptions): Promise<string> {
     system: opts.system,
     prompt: opts.prompt,
     temperature: opts.temperature ?? 0.6,
-    maxTokens: opts.maxTokens ?? 1200
+    maxOutputTokens: opts.maxTokens ?? 1200
   });
   return text;
 }
@@ -63,7 +63,7 @@ export async function aiStructured<T extends z.ZodTypeAny>(
     system: opts.system,
     prompt: opts.prompt,
     temperature: opts.temperature ?? 0.4,
-    maxTokens: opts.maxTokens ?? 1500
+    maxOutputTokens: opts.maxTokens ?? 1500
   });
   return object;
 }

@@ -12,7 +12,7 @@ export async function GET() {
     const merchant = await getCurrentMerchant();
     if (!merchant) return NextResponse.json({ error: "no merchant" }, { status: 400 });
 
-    const supabase = getServerSupabase();
+    const supabase = await getServerSupabase();
     const { data: lastPayment } = await supabase
       .from("billing_payments")
       .select("plan, status, paid_at, amount_halalas")

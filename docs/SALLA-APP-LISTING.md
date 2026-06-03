@@ -133,10 +133,10 @@ In the submission form, provide:
 
 ## Submission checklist
 
-- [ ] All five screenshots produced and named `screen-01.png` … `screen-05.png`
-- [ ] Cover image at `marketing/salla-cover.png`
-- [ ] Privacy, terms, PDPL, refund pages live and indexed
-- [ ] Demo merchant account ready
-- [ ] Loom walkthrough video uploaded
-- [ ] Support email auto-responder configured
-- [ ] Pricing tiers entered exactly as above
+- [ ] All five screenshots produced and named `screen-01.png` … `screen-05.png` _(media — needs a deployed instance to capture)_
+- [ ] Cover image at `marketing/salla-cover.png` _(design asset)_
+- [x] Privacy, terms, PDPL, refund pages exist in code (`app/legal/{privacy,terms,refunds}`) — _confirm "indexed" after deploy_
+- [~] Demo merchant account ready — seed implemented: `npm run db:seed` (needs live `SUPABASE_SERVICE_ROLE_KEY`)
+- [ ] Loom walkthrough video uploaded _(media)_
+- [x] Support email auto-responder configured — implemented in `app/api/support` via `lib/support/notify.ts`; set `RESEND_API_KEY` + `SUPPORT_FROM_EMAIL` in prod
+- [x] Pricing tiers match in code (99 / 299 / 599 SAR, guarded by `__tests__/billing/plans.test.ts`) — _enter the same in the Salla portal_

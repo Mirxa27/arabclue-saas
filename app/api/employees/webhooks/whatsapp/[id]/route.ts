@@ -15,13 +15,13 @@ import { enforceRateLimit } from "@/lib/security/rate-limit";
 
 export const dynamic = "force-dynamic";
 
-export async function GET(req: NextRequest, ctx: { params: { id: string } }): Promise<NextResponse | Response> {
+export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }): Promise<NextResponse | Response> {
   const url = new URL(req.url);
   const mode = url.searchParams.get("hub.mode");
   const challenge = url.searchParams.get("hub.challenge");
   const token = url.searchParams.get("hub.verify_token");
 
-  const integration = await loadEmployeeIntegration(ctx.params.id, "whatsapp");
+  const integration = await loadEmployeeIntegration((await ctx.params).id, "whatsapp");
   const expected =
     (integration?.credentials.verify_token as string | undefined) ?? process.env.WHATSAPP_VERIFY_TOKEN;
 
@@ -31,12 +31,12 @@ export async function GET(req: NextRequest, ctx: { params: { id: string } }): Pr
   return NextResponse.json({ error: "forbidden" }, { status: 403 });
 }
 
-export async function POST(req: NextRequest, ctx: { params: { id: string } }): Promise<NextResponse> {
+export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }): Promise<NextResponse> {
   try {
-    const limited = await enforceRateLimit(req, "employees:webhook:whatsapp", 180, 60_000, ctx.params.id);
+    const limited = await enforceRateLimit(req, "employees:webhook:whatsapp", 180, 60_000, (await ctx.params).id);
     if (limited instanceof NextResponse) return limited;
 
-    const integration = await loadEmployeeIntegration(ctx.params.id, "whatsapp");
+    const integration = await loadEmployeeIntegration((await ctx.params).id, "whatsapp");
     if (!integration) return NextResponse.json({ error: "no whatsapp integration" }, { status: 404 });
 
     const payload = await req.json();
@@ -44,7 +44,7 @@ export async function POST(req: NextRequest, ctx: { params: { id: string } }): P
     for (const m of messages) {
       if (!m.text) continue;
       await handleInboundMessage({
-        employeeId: ctx.params.id,
+        employeeId: (await ctx.params).id,
         channel: "whatsapp",
         externalId: m.from,
         text: m.text,

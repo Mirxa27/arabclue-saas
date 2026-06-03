@@ -15,7 +15,7 @@ const ChatSchema = z.object({
 
 async function assertEmployeeOwned(id: string): Promise<string> {
   const merchant = await requireMerchant();
-  const sb = getServerSupabase();
+  const sb = await getServerSupabase();
   const { data, error } = await sb
     .from("ai_employees")
     .select("id")
@@ -27,12 +27,12 @@ async function assertEmployeeOwned(id: string): Promise<string> {
 }
 
 // POST /api/employees/:id/chat — dashboard chat with the employee
-export async function POST(req: NextRequest, ctx: { params: { id: string } }): Promise<NextResponse> {
+export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }): Promise<NextResponse> {
   try {
-    const limited = await enforceRateLimit(req, "employees:chat", 60, 60_000, ctx.params.id);
+    const limited = await enforceRateLimit(req, "employees:chat", 60, 60_000, (await ctx.params).id);
     if (limited instanceof NextResponse) return limited;
 
-    const employeeId = await assertEmployeeOwned(ctx.params.id);
+    const employeeId = await assertEmployeeOwned((await ctx.params).id);
     const body = ChatSchema.parse(await req.json());
 
     const conversationId =
@@ -61,13 +61,13 @@ export async function POST(req: NextRequest, ctx: { params: { id: string } }): P
 }
 
 // GET /api/employees/:id/chat?conversation_id=... — fetch transcript
-export async function GET(req: NextRequest, ctx: { params: { id: string } }): Promise<NextResponse> {
+export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }): Promise<NextResponse> {
   try {
-    await assertEmployeeOwned(ctx.params.id);
+    await assertEmployeeOwned((await ctx.params).id);
     const url = new URL(req.url);
     const convoId = url.searchParams.get("conversation_id");
     if (!convoId) return NextResponse.json({ messages: [] });
-    const sb = getServerSupabase();
+    const sb = await getServerSupabase();
     const { data } = await sb
       .from("ai_employee_messages")
       .select("*")
