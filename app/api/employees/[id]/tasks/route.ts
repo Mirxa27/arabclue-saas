@@ -1,14 +1,15 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { TaskCreateSchema, TaskUpdateSchema } from "@/lib/employees/task-schemas";
-import { requireMerchant } from "@/lib/auth/session";
+import { requireMerchantApi } from "@/lib/auth/session";
 import { getServerSupabase } from "@/lib/db/supabase";
 import { handleRouteError } from "@/lib/api/route-handler";
+import { notFound } from "@/lib/api/errors";
 
 export const dynamic = "force-dynamic";
 
 
 async function assertEmployeeOwned(id: string): Promise<string> {
-  const merchant = await requireMerchant();
+  const merchant = await requireMerchantApi();
   const sb = await getServerSupabase();
   const { data, error } = await sb
     .from("ai_employees")
@@ -16,7 +17,7 @@ async function assertEmployeeOwned(id: string): Promise<string> {
     .eq("id", id)
     .eq("merchant_id", merchant.id)
     .single();
-  if (error || !data) throw new Error("Employee not found");
+  if (error || !data) throw notFound("Employee");
   return data.id as string;
 }
 

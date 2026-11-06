@@ -1,6 +1,7 @@
 import { getServerSupabase, getServiceSupabase } from "@/lib/db/supabase";
 import { fetchMoyasarPayment, verifyPaymentMatchesIntent } from "@/lib/moyasar/client";
 import type { AIEmployeeRow } from "@/lib/employees/types";
+import { notFound } from "@/lib/api/errors";
 
 const SUBSCRIPTION_DAYS = 30;
 
@@ -25,7 +26,7 @@ export async function createEmployeeBillingIntent(merchantId: string, employeeId
     .eq("id", employeeId)
     .eq("merchant_id", merchantId)
     .single();
-  if (empErr || !employee) throw new Error("Employee not found");
+  if (empErr || !employee) throw notFound("Employee");
 
   const row = employee as AIEmployeeRow & { billing_status?: string };
   const givenId = crypto.randomUUID();
@@ -76,7 +77,7 @@ async function confirmEmployeeBillingWithClient(
     .eq("given_id", args.intentId)
     .maybeSingle();
 
-  if (error || !intent) throw new Error("Billing intent not found");
+  if (error || !intent) throw notFound("Billing intent");
 
   const row = intent as EmployeeBillingPaymentRow;
   if (row.plan !== "employee") throw new Error("Not an employee billing intent");

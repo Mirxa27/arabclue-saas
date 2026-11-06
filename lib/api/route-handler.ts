@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
+import { unstable_rethrow } from "next/navigation";
 import { ZodError } from "zod";
 import { PlatformAdminAuthError } from "@/lib/auth/admin";
 import { AuthError } from "@/lib/auth/session";
+import { HttpError } from "@/lib/api/errors";
 import { MoyasarApiError } from "@/lib/moyasar/types";
 import { reportError } from "@/lib/observability/error-reporter";
 
@@ -23,6 +25,13 @@ export function formatZodIssues(err: ZodError): string {
 }
 
 export function handleRouteError(err: unknown, context?: { route?: string }) {
+  // Let Next.js control-flow errors (redirect(), notFound()) propagate instead of
+  // turning a navigation into a 500.
+  unstable_rethrow(err);
+  if (err instanceof HttpError) {
+    if (err.status >= 500) reportError(err, { route: context?.route, status: err.status });
+    return jsonError(err.message, err.status);
+  }
   if (err instanceof ZodError) {
     return jsonError(formatZodIssues(err), 400);
   }

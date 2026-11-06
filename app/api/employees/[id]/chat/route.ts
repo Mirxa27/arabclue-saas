@@ -1,8 +1,9 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
-import { requireMerchant } from "@/lib/auth/session";
+import { requireMerchantApi } from "@/lib/auth/session";
 import { getServerSupabase } from "@/lib/db/supabase";
 import { handleRouteError } from "@/lib/api/route-handler";
+import { notFound } from "@/lib/api/errors";
 import { respond, upsertConversation } from "@/lib/employees/runtime";
 import { enforceRateLimit } from "@/lib/security/rate-limit";
 
@@ -14,7 +15,7 @@ const ChatSchema = z.object({
 });
 
 async function assertEmployeeOwned(id: string): Promise<string> {
-  const merchant = await requireMerchant();
+  const merchant = await requireMerchantApi();
   const sb = await getServerSupabase();
   const { data, error } = await sb
     .from("ai_employees")
@@ -22,7 +23,7 @@ async function assertEmployeeOwned(id: string): Promise<string> {
     .eq("id", id)
     .eq("merchant_id", merchant.id)
     .single();
-  if (error || !data) throw new Error("Employee not found");
+  if (error || !data) throw notFound("Employee");
   return data.id as string;
 }
 

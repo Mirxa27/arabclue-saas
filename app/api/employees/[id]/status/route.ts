@@ -7,9 +7,10 @@
 
 import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
-import { requireMerchant } from "@/lib/auth/session";
+import { requireMerchantApi } from "@/lib/auth/session";
 import { getServerSupabase } from "@/lib/db/supabase";
 import { handleRouteError } from "@/lib/api/route-handler";
+import { notFound } from "@/lib/api/errors";
 import { enforceRateLimit } from "@/lib/security/rate-limit";
 
 export const dynamic = "force-dynamic";
@@ -19,7 +20,7 @@ const StatusSchema = z.object({
 });
 
 async function assertEmployeeOwnership(employeeId: string): Promise<void> {
-  const merchant = await requireMerchant();
+  const merchant = await requireMerchantApi();
   const sb = await getServerSupabase();
   const { data, error } = await sb
     .from("ai_employees")
@@ -27,7 +28,7 @@ async function assertEmployeeOwnership(employeeId: string): Promise<void> {
     .eq("id", employeeId)
     .eq("merchant_id", merchant.id)
     .single();
-  if (error || !data) throw new Error("Employee not found");
+  if (error || !data) throw notFound("Employee");
 }
 
 export async function PATCH(
@@ -37,7 +38,7 @@ export async function PATCH(
   try {
     await assertEmployeeOwnership((await ctx.params).id);
 
-    const merchant = await requireMerchant();
+    const merchant = await requireMerchantApi();
     const limited = await enforceRateLimit(
       req,
       "employees:status-toggle",

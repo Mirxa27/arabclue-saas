@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
-import { requireMerchant } from "@/lib/auth/session";
+import { requireMerchantApi } from "@/lib/auth/session";
 import { getServerSupabase } from "@/lib/db/supabase";
 import { handleRouteError } from "@/lib/api/route-handler";
 import { getRole, priceForTier, TIER_LABELS } from "@/lib/employees/catalog";
@@ -33,7 +33,7 @@ const HireSchema = z.object({
 // ── GET /api/employees — list hired employees for the merchant ───────────────
 export async function GET(): Promise<NextResponse> {
   try {
-    const merchant = await requireMerchant();
+    const merchant = await requireMerchantApi();
     const sb = await getServerSupabase();
     const { data, error } = await sb
       .from("ai_employees")
@@ -51,7 +51,7 @@ export async function GET(): Promise<NextResponse> {
 // ── POST /api/employees — hire a new AI employee ─────────────────────────────
 export async function POST(req: NextRequest): Promise<NextResponse> {
   try {
-    const merchant = await requireMerchant();
+    const merchant = await requireMerchantApi();
     const body = HireSchema.parse(await req.json());
 
     if (!merchantCanUseFeature(merchant, "employees")) {

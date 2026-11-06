@@ -4,7 +4,7 @@ import { MoyasarWebhookEventSchema } from "@/lib/moyasar/types";
 import { verifyMoyasarWebhook } from "@/lib/moyasar/webhook";
 import { handleMoyasarWebhookPayment } from "@/lib/billing/service";
 import { getServiceSupabase } from "@/lib/db/supabase";
-import { claimWebhookEvent } from "@/lib/webhooks/idempotency";
+import { runWebhookOnce } from "@/lib/webhooks/idempotency";
 
 export const runtime = "nodejs";
 
@@ -20,13 +20,17 @@ export async function POST(req: NextRequest) {
 
     const event = MoyasarWebhookEventSchema.parse(JSON.parse(raw));
     const supabase = getServiceSupabase();
-    const claim = await claimWebhookEvent(supabase, "moyasar", event.id);
-    if (claim === "duplicate") {
+    // Claim → process → complete; a failure releases the claim so Moyasar's retry is processed.
+    const outcome = await runWebhookOnce(supabase, "moyasar", event.id, async () => {
+      if (event.type === "payment_paid" || event.type === "payment_captured") {
+        await handleMoyasarWebhookPayment(event.data.id);
+      }
+    });
+    if (outcome.status === "duplicate") {
       return NextResponse.json({ ok: true, duplicate: true });
     }
-
-    if (event.type === "payment_paid" || event.type === "payment_captured") {
-      await handleMoyasarWebhookPayment(event.data.id);
+    if (outcome.status === "in_progress") {
+      return NextResponse.json({ error: "event is being processed" }, { status: 409 });
     }
 
     return NextResponse.json({ ok: true });

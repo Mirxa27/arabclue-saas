@@ -2,6 +2,7 @@ import { getServerSupabase, getServiceSupabase } from "@/lib/db/supabase";
 import { getPlan, type BillingPlan } from "@/lib/billing/plans";
 import { fetchMoyasarPayment, verifyPaymentMatchesIntent } from "@/lib/moyasar/client";
 import type { MerchantPlan } from "@/lib/types/database";
+import { notFound } from "@/lib/api/errors";
 
 const SUBSCRIPTION_DAYS = 30;
 
@@ -115,7 +116,7 @@ async function confirmBillingPaymentWithClient(
     .eq("given_id", args.intentId)
     .maybeSingle();
 
-  if (error || !intent) throw new Error("Billing intent not found");
+  if (error || !intent) throw notFound("Billing intent");
 
   const row = intent as BillingPaymentRow;
   if (row.status === "paid") {

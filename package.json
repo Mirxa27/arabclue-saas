@@ -13,7 +13,8 @@
     "test:watch": "vitest",
     "db:push": "supabase db push",
     "db:reset": "supabase db reset",
-    "db:seed": "tsx scripts/seed-demo-merchant.ts"
+    "db:seed": "tsx scripts/seed-demo-merchant.ts",
+    "db:test": "bash scripts/db-test.sh"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.138",

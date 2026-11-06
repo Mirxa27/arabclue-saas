@@ -38,3 +38,27 @@ jobs:
           NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'stub' }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY || 'stub' }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY || 'sk-stub' }}
+
+  database:
+    # Applies every migration to a real PostgreSQL (with Supabase role/auth
+    # emulation) and runs the SQL assertions in supabase/tests.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Migrations + database assertions
+        run: npm run db:test
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+

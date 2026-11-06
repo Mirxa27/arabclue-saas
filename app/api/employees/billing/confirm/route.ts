@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { requireMerchant } from "@/lib/auth/session";
+import { requireMerchantApi } from "@/lib/auth/session";
 import { handleRouteError } from "@/lib/api/route-handler";
 import { confirmEmployeeBillingPayment } from "@/lib/billing/employee-billing";
 
@@ -13,7 +13,7 @@ export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest) {
   try {
-    const merchant = await requireMerchant();
+    const merchant = await requireMerchantApi();
     const body = BodySchema.parse(await req.json());
     const result = await confirmEmployeeBillingPayment({
       merchantId: merchant.id,

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { requireMerchant } from "@/lib/auth/session";
+import { requireMerchantApi } from "@/lib/auth/session";
 import { handleRouteError } from "@/lib/api/route-handler";
 import { createEmployeeBillingIntent } from "@/lib/billing/employee-billing";
 import { getPublishableKey } from "@/lib/moyasar/client";
@@ -14,7 +14,7 @@ export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest) {
   try {
-    const merchant = await requireMerchant();
+    const merchant = await requireMerchantApi();
     const limited = await enforceRateLimit(req, "billing:employee-intent", 10, 60_000, merchant.id);
     if (limited instanceof NextResponse) return limited;
 

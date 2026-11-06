@@ -1,6 +1,7 @@
 import { getServerSupabase } from "@/lib/db/supabase";
 import { redirect } from "next/navigation";
 import type { Merchant } from "@/lib/types/database";
+import { HttpError } from "@/lib/api/errors";
 
 export class AuthError extends Error {
   readonly status = 401;
@@ -45,5 +46,17 @@ export async function getCurrentMerchant(): Promise<Merchant | null> {
 export async function requireMerchant() {
   const merchant = await getCurrentMerchant();
   if (!merchant) redirect("/welcome");
+  return merchant;
+}
+
+/**
+ * API route handlers — throws AuthError (401) without a session and
+ * HttpError (403) when the user has not created a merchant profile yet.
+ * Never redirects: fetch() callers get JSON, not the login page.
+ */
+export async function requireMerchantApi(): Promise<Merchant> {
+  await requireUserApi();
+  const merchant = await getCurrentMerchant();
+  if (!merchant) throw new HttpError(403, "Complete onboarding first", "merchant_required");
   return merchant;
 }

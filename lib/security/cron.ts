@@ -10,14 +10,7 @@
  * this is a local-dev affordance; production must set CRON_SECRET.
  */
 import { NextResponse, type NextRequest } from "next/server";
-import { timingSafeEqual } from "crypto";
-
-function safeEqual(a: string, b: string): boolean {
-  const ba = Buffer.from(a);
-  const bb = Buffer.from(b);
-  if (ba.length !== bb.length) return false;
-  return timingSafeEqual(ba, bb);
-}
+import { safeEqual } from "@/lib/security/compare";
 
 export function isCronAuthorized(req: NextRequest, secret: string | undefined = process.env.CRON_SECRET): boolean {
   if (!secret) return true; // dev only — no secret configured

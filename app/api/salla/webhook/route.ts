@@ -5,7 +5,7 @@ import { generateInvoice } from "@/lib/zatca/invoice";
 import { getServiceSupabase } from "@/lib/db/supabase";
 import { handleRouteError } from "@/lib/api/route-handler";
 import { SallaOrderCreatedEventSchema } from "@/lib/types/salla";
-import { claimWebhookEvent, sallaWebhookEventId } from "@/lib/webhooks/idempotency";
+import { runWebhookOnce, sallaWebhookEventId } from "@/lib/webhooks/idempotency";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Merchant, SellerAddress } from "@/lib/types/database";
 
@@ -23,23 +23,27 @@ export async function POST(req: NextRequest) {
     const evt = SallaWebhookEventSchema.parse(JSON.parse(raw));
     const supabase = getServiceSupabase();
     const eventId = sallaWebhookEventId(raw, evt);
-    const claim = await claimWebhookEvent(supabase, "salla", eventId);
-    if (claim === "duplicate") {
+    // Claim → process → complete; a failure releases the claim so Salla's retry is processed.
+    const outcome = await runWebhookOnce(supabase, "salla", eventId, async () => {
+      switch (evt.event) {
+        case "order.created":
+          await handleOrderCreated(SallaOrderCreatedEventSchema.parse(evt), supabase);
+          break;
+        case "app.installed":
+          await supabase.from("events").insert({ kind: "salla.installed", merchant: String(evt.merchant), payload: evt });
+          break;
+        case "app.uninstalled":
+          await supabase.from("merchants").update({ uninstalled_at: new Date().toISOString() }).eq("salla_merchant_id", String(evt.merchant));
+          break;
+        default:
+          await supabase.from("events").insert({ kind: evt.event, merchant: String(evt.merchant), payload: evt });
+      }
+    });
+    if (outcome.status === "duplicate") {
       return NextResponse.json({ ok: true, duplicate: true });
     }
-
-    switch (evt.event) {
-      case "order.created":
-        await handleOrderCreated(SallaOrderCreatedEventSchema.parse(evt), supabase);
-        break;
-      case "app.installed":
-        await supabase.from("events").insert({ kind: "salla.installed", merchant: String(evt.merchant), payload: evt });
-        break;
-      case "app.uninstalled":
-        await supabase.from("merchants").update({ uninstalled_at: new Date().toISOString() }).eq("salla_merchant_id", String(evt.merchant));
-        break;
-      default:
-        await supabase.from("events").insert({ kind: evt.event, merchant: String(evt.merchant), payload: evt });
+    if (outcome.status === "in_progress") {
+      return NextResponse.json({ error: "event is being processed" }, { status: 409 });
     }
 
     return NextResponse.json({ ok: true });

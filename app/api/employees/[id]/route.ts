@@ -1,8 +1,9 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
-import { requireMerchant } from "@/lib/auth/session";
+import { requireMerchantApi } from "@/lib/auth/session";
 import { getServerSupabase } from "@/lib/db/supabase";
 import { handleRouteError } from "@/lib/api/route-handler";
+import { notFound } from "@/lib/api/errors";
 import { redactIntegrationRow } from "@/lib/employees/credentials";
 import type { AIEmployeeRow } from "@/lib/employees/types";
 
@@ -29,7 +30,7 @@ const UpdateSchema = z.object({
 });
 
 async function fetchEmployeeOwned(id: string): Promise<AIEmployeeRow> {
-  const merchant = await requireMerchant();
+  const merchant = await requireMerchantApi();
   const sb = await getServerSupabase();
   const { data, error } = await sb
     .from("ai_employees")
@@ -37,7 +38,7 @@ async function fetchEmployeeOwned(id: string): Promise<AIEmployeeRow> {
     .eq("id", id)
     .eq("merchant_id", merchant.id)
     .single();
-  if (error || !data) throw new Error("Employee not found");
+  if (error || !data) throw notFound("Employee");
   return data as AIEmployeeRow;
 }
 

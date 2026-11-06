@@ -1,3 +1,6 @@
+-- NOTE: PostgreSQL has no CREATE POLICY IF NOT EXISTS; the original statements were
+-- syntax errors that stopped fresh databases here. Rewritten as drop-if-exists + create
+-- (same policies, re-runnable). Already-applied environments are unaffected.
 -- arabclue · migration 0002
 -- adds: user ↔ merchant linkage, Salla products, ZATCA CSID, social channels
 
@@ -43,25 +46,32 @@ create table if not exists social_channels (
 );
 
 -- ── RLS policies for user-scoped access ─────────────────────────────────────
-create policy if not exists "merchants_self" on merchants
+drop policy if exists "merchants_self" on merchants;
+create policy "merchants_self" on merchants
   for all using (owner_user_id = auth.uid());
 
-create policy if not exists "brand_kits_self" on brand_kits
+drop policy if exists "brand_kits_self" on brand_kits;
+create policy "brand_kits_self" on brand_kits
   for all using (merchant_id in (select id from merchants where owner_user_id = auth.uid()));
 
-create policy if not exists "invoices_self" on invoices
+drop policy if exists "invoices_self" on invoices;
+create policy "invoices_self" on invoices
   for all using (merchant_id in (select id from merchants where owner_user_id = auth.uid()));
 
-create policy if not exists "social_posts_self" on social_posts
+drop policy if exists "social_posts_self" on social_posts;
+create policy "social_posts_self" on social_posts
   for all using (merchant_id in (select id from merchants where owner_user_id = auth.uid()));
 
-create policy if not exists "social_plans_self" on social_plans
+drop policy if exists "social_plans_self" on social_plans;
+create policy "social_plans_self" on social_plans
   for all using (merchant_id in (select id from merchants where owner_user_id = auth.uid()));
 
 alter table salla_products enable row level security;
-create policy if not exists "salla_products_self" on salla_products
+drop policy if exists "salla_products_self" on salla_products;
+create policy "salla_products_self" on salla_products
   for all using (merchant_id in (select id from merchants where owner_user_id = auth.uid()));
 
 alter table social_channels enable row level security;
-create policy if not exists "social_channels_self" on social_channels
+drop policy if exists "social_channels_self" on social_channels;
+create policy "social_channels_self" on social_channels
   for all using (merchant_id in (select id from merchants where owner_user_id = auth.uid()));

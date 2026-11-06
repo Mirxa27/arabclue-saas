@@ -9,7 +9,7 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { requireUser } from "@/lib/auth/session";
+import { requireUserApi } from "@/lib/auth/session";
 import { getServerSupabase } from "@/lib/db/supabase";
 import { handleRouteError } from "@/lib/api/route-handler";
 import { DEFAULT_PERSONAS, getPersona, type AgentPersona, type PersonaRole } from "@/lib/agents/personas";
@@ -34,7 +34,7 @@ function shapePersona(p: AgentPersona) {
 // ── GET ──────────────────────────────────────────────────────────────────────
 export async function GET(_req: NextRequest): Promise<NextResponse> {
   try {
-    const user = await requireUser();
+    const user = await requireUserApi();
     const supabase = await getServerSupabase();
     const { data: merchant } = await supabase
       .from("merchants")
@@ -110,7 +110,7 @@ const PatchBodySchema = z.object({
 
 export async function PATCH(req: NextRequest): Promise<NextResponse> {
   try {
-    const user = await requireUser();
+    const user = await requireUserApi();
     const supabase = await getServerSupabase();
     const { data: merchant } = await supabase
       .from("merchants")

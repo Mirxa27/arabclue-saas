@@ -12,7 +12,7 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { requireUser } from "@/lib/auth/session";
+import { requireUserApi } from "@/lib/auth/session";
 import { handleRouteError } from "@/lib/api/route-handler";
 import { aiText } from "@/lib/ai/providers";
 import {
@@ -64,7 +64,7 @@ const OnboardingChatBody = z.object({
 export async function POST(req: NextRequest): Promise<NextResponse> {
   try {
     // Auth gate — must be logged in
-    const user = await requireUser();
+    const user = await requireUserApi();
 
     // Parse and validate request body
     const body = OnboardingChatBody.parse(await req.json());

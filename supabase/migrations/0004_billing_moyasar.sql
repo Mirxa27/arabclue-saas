@@ -1,3 +1,6 @@
+-- NOTE: PostgreSQL has no CREATE POLICY IF NOT EXISTS; the original statements were
+-- syntax errors that stopped fresh databases here. Rewritten as drop-if-exists + create
+-- (same policies, re-runnable). Already-applied environments are unaffected.
 -- arabclue · Moyasar billing & subscriptions
 
 alter table merchants
@@ -29,5 +32,6 @@ create index if not exists billing_payments_status_idx on billing_payments(statu
 
 alter table billing_payments enable row level security;
 
-create policy if not exists "billing_payments_self" on billing_payments
+drop policy if exists "billing_payments_self" on billing_payments;
+create policy "billing_payments_self" on billing_payments
   for all using (merchant_id in (select id from merchants where owner_user_id = auth.uid()));
