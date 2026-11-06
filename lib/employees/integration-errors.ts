@@ -23,7 +23,9 @@ export type IntegrationErrorReason =
   | "page_restricted"
   | "instagram_not_linked"
   | "capability_missing"
-  | "account_not_eligible";
+  | "account_not_eligible"
+  /** The stored credentials lack what the send adapter needs (e.g. an old one-click row, SMTP-only email). */
+  | "credentials_incomplete";
 
 export type IntegrationErrorInfo = {
   reason: IntegrationErrorReason;
@@ -62,6 +64,10 @@ export const INTEGRATION_ERROR_COPY: Record<IntegrationErrorReason, { ar: string
   account_not_eligible: {
     ar: "هذا الحساب غير مؤهل بعد لواجهة المراسلة من Meta.",
     en: "This account is not yet eligible for Meta's messaging API."
+  },
+  credentials_incomplete: {
+    ar: "هذا الربط ينقصه ما يلزم للإرسال (مثل رقم واتساب أو مفتاح المرسل). افصل القناة ثم اربطها من جديد.",
+    en: "This connection is missing what sending needs (for example the WhatsApp number or the sender key). Disconnect the channel and connect it again."
   }
 };
 

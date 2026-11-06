@@ -20,6 +20,16 @@ import { randomBytes } from "crypto";
 import { z } from "zod";
 import { HttpError } from "@/lib/api/errors";
 import { formatZodIssues } from "@/lib/api/route-handler";
+import { boundedRecord } from "@/lib/api/zod-bounds";
+import { OutboundUrlError } from "@/lib/security/outbound-http";
+import { isMessagingChannel } from "@/lib/employees/channels/dispatch";
+import {
+  checkResendSender,
+  emailAddressOf,
+  emailDomainOf,
+  isPlatformEmailDomain,
+  requireMerchantSender
+} from "@/lib/employees/channels/email";
 import {
   META_APP_SECRET_REQUIRED_MESSAGE,
   MetaConnectError,
@@ -27,6 +37,9 @@ import {
   type PlatformMetaApp
 } from "@/lib/employees/channels/meta";
 import { registerTelegramWebhook } from "@/lib/employees/channels/telegram";
+import { verifyWebhookUrl } from "@/lib/employees/channels/webhook";
+import { missingSendCredentials } from "@/lib/employees/channel-credentials";
+import { EmployeeApiError } from "@/lib/employees/http";
 import type { IntegrationKind } from "@/lib/employees/types";
 
 /** Written only by the server (OAuth callback, connect checks, send-failure handling). */
@@ -63,6 +76,44 @@ export const WhatsAppConnectCredentialsSchema = z.object({
 export const TelegramConnectCredentialsSchema = z.object({
   bot_token: z.string().trim().min(1, "Telegram bot_token required").max(256),
   bot_username: z.preprocess(blankToUndefined, z.string().trim().max(64).optional())
+});
+
+/** SW-6: the merchant's own Resend account and a sender on their verified domain. */
+export const EmailConnectCredentialsSchema = z.object({
+  from: z.string().trim().min(3, "from: the sender address on your domain is required").max(320),
+  api_key: z.string().trim().min(8, "api_key: your Resend API key is required").max(256),
+  reply_to: z.preprocess(blankToUndefined, z.string().trim().email("reply_to: not a valid email address").max(320).optional())
+});
+
+export const SlackConnectCredentialsSchema = z.object({
+  bot_token: z.string().trim().regex(/^xoxb-[A-Za-z0-9-]{10,250}$/, "bot_token must be the bot token (xoxb-…)"),
+  signing_secret: z.preprocess(blankToUndefined, z.string().trim().min(16, "signing_secret looks too short").max(256).optional()),
+  default_channel: z.preprocess(
+    blankToUndefined,
+    z
+      .string()
+      .trim()
+      .regex(/^([CDG][A-Z0-9]{6,20}|#[a-z0-9_-]{1,80})$/, "default_channel must be a channel id (C…) or #name")
+      .optional()
+  )
+});
+
+export const TwilioSmsConnectCredentialsSchema = z
+  .object({
+    account_sid: z.string().trim().regex(/^AC[0-9a-f]{32}$/, "account_sid must look like AC followed by 32 hex characters"),
+    auth_token: z.string().trim().regex(/^[0-9a-f]{32}$/, "auth_token must be the 32-character Auth Token"),
+    from: z.preprocess(blankToUndefined, z.string().trim().regex(/^\+[1-9]\d{7,14}$/, "from must be an E.164 number").optional()),
+    messaging_service_sid: z.preprocess(
+      blankToUndefined,
+      z.string().trim().regex(/^MG[0-9a-f]{32}$/, "messaging_service_sid must look like MG followed by 32 hex characters").optional()
+    )
+  })
+  .refine((c) => Boolean(c.from || c.messaging_service_sid), { message: "from or messaging_service_sid is required" });
+
+export const WebhookConnectCredentialsSchema = z.object({
+  url: z.string().trim().min(8).max(2048),
+  signing_secret: z.preprocess(blankToUndefined, z.string().trim().min(16, "signing_secret must be at least 16 characters").max(256).optional()),
+  headers: boundedRecord(20, z.string().max(64), z.string().max(1024)).optional()
 });
 
 function parseCredentials<T extends z.ZodType>(schema: T, credentials: Record<string, unknown>): z.infer<T> {
@@ -166,5 +217,80 @@ export async function prepareIntegrationConnect(
     };
   }
 
+  if (body.kind === "email") {
+    const given = (k: string) => typeof body.credentials[k] === "string" && (body.credentials[k] as string).trim() !== "";
+    if (!given("from") || !given("api_key")) {
+      throw new EmployeeApiError(
+        400,
+        "email_sender_required",
+        "The email channel needs your own Resend API key (api_key) and a sender address on your verified domain (from)."
+      );
+    }
+    const creds = parseCredentials(EmailConnectCredentialsSchema, body.credentials);
+    let sender;
+    try {
+      sender = requireMerchantSender(creds);
+    } catch (err) {
+      const domain = emailDomainOf(creds.from);
+      if (domain && isPlatformEmailDomain(domain)) {
+        throw new EmployeeApiError(400, "email_sender_forbidden", "from: the sender must be on your own domain, not the platform's");
+      }
+      throw new EmployeeApiError(400, "email_sender_required", err instanceof Error ? err.message : "from / api_key required");
+    }
+    const check = await checkResendSender(sender);
+    if (!check.ok) {
+      throw new EmployeeApiError(check.code === "provider_unavailable" ? 502 : 400, check.code, check.message);
+    }
+    return {
+      external_id: emailAddressOf(sender.from),
+      credentials: { ...sender },
+      config: { ...config, sender_domain: emailDomainOf(sender.from), domain_verified: check.domainVerified }
+    };
+  }
+
+  if (body.kind === "gmail") {
+    throw new EmployeeApiError(
+      400,
+      "invalid_credentials",
+      "Gmail is connected with the one-click Google sign-in (GET /api/employees/:id/oauth/gmail/start), not with pasted credentials."
+    );
+  }
+
+  if (body.kind === "slack") {
+    const creds = parseCredentials(SlackConnectCredentialsSchema, body.credentials);
+    return { external_id: body.external_id ?? null, credentials: creds, config };
+  }
+
+  if (body.kind === "twilio_sms") {
+    const creds = parseCredentials(TwilioSmsConnectCredentialsSchema, body.credentials);
+    return { external_id: creds.from ?? creds.messaging_service_sid ?? null, credentials: creds, config };
+  }
+
+  if (body.kind === "webhook") {
+    const creds = parseCredentials(WebhookConnectCredentialsSchema, body.credentials);
+    try {
+      // SW-4: refuse private / internal targets at connect time (delivery re-checks every send).
+      await verifyWebhookUrl(creds.url);
+    } catch (err) {
+      if (err instanceof OutboundUrlError) {
+        throw new EmployeeApiError(400, "webhook_url_blocked", `url: ${err.message}`);
+      }
+      throw err;
+    }
+    return { external_id: body.external_id ?? null, credentials: creds, config };
+  }
+
   return { external_id: body.external_id ?? null, credentials: body.credentials, config };
+}
+
+/**
+ * Refuse to store a messaging channel as `connected` without what its adapter needs (SW-7):
+ * the merchant would see "connected" while every send fails.
+ */
+export function assertSendableCredentials(kind: IntegrationKind, credentials: Record<string, unknown>): void {
+  if (!isMessagingChannel(kind)) return;
+  const missing = missingSendCredentials(kind, credentials);
+  if (missing.length) {
+    throw new EmployeeApiError(400, "invalid_credentials", `missing ${missing.join(", ")} for ${kind}`);
+  }
 }

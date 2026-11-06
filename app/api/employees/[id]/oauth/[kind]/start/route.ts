@@ -31,6 +31,7 @@ export async function GET(
     const { id, kind } = await ctx.params;
     return await beginEmployeeOAuth(req, {
       merchantId: session.merchant.id,
+      merchantDpaVersion: session.merchant.dpa_version ?? null,
       employeeId: id,
       kind,
       returnTo: req.nextUrl.searchParams.get("return_to")

@@ -107,7 +107,16 @@ function qs(params: Record<string, string | undefined>): string {
 
 // ─── providers ─────────────────────────────────────────────────────────────
 
-const google = (kind: IntegrationKind, scopes: string[], label: string): OAuthProvider => ({
+/** https://developers.facebook.com/docs/messenger-platform/instagram/get-started (permissions). */
+export const INSTAGRAM_DM_SCOPES = [
+  "instagram_basic",
+  "instagram_manage_messages",
+  "pages_show_list",
+  "pages_manage_metadata",
+  "business_management"
+];
+
+const google =(kind: IntegrationKind, scopes: string[], label: string): OAuthProvider => ({
   kind,
   label,
   brandColor: "#EA4335",
@@ -215,11 +224,14 @@ const PROVIDERS: OAuthProvider[] = [
     }
   }))(),
 
+  // Instagram Direct for AI employees (SW-7): the messaging permissions of the Messenger
+  // Platform's Instagram API, so the stored row is a Page token + IG account the DM adapter
+  // can use (lib/employees/oauth/channel-setup.ts → instagramSetup).
   ((): OAuthProvider => ({
     kind: "instagram",
     label: "Instagram",
     brandColor: "#E1306C",
-    scopes: ["instagram_basic", "instagram_content_publish", "pages_show_list", "pages_manage_posts"],
+    scopes: INSTAGRAM_DM_SCOPES,
     usesPkce: false,
     clientId: () => env("META_APP_ID"),
     clientSecret: () => env("META_APP_SECRET"),
@@ -228,7 +240,7 @@ const PROVIDERS: OAuthProvider[] = [
         client_id: env("META_APP_ID") ?? "",
         redirect_uri: redirectUri,
         state,
-        scope: ["instagram_basic", "instagram_content_publish", "pages_show_list", "pages_manage_posts"].join(",")
+        scope: INSTAGRAM_DM_SCOPES.join(",")
       })));
     },
     async exchange({ code, redirectUri }) {

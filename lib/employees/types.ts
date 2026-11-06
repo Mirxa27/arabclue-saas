@@ -181,6 +181,23 @@ export type AIMessageRow = {
   created_at: string;
 };
 
+/**
+ * Who a turn (or a task created during it) speaks for. `merchant`: the authenticated owner
+ * (dashboard chat, tasks the owner wrote). `inbound_channel`: an external customer on a
+ * messaging channel — untrusted; it may only ever cause a reply in its own conversation.
+ */
+export type TurnOrigin = "merchant" | "inbound_channel";
+
+/** Who works a task: the 24/7 tick (`agent`) or the merchant (`human`). */
+export type TaskAssignee = "agent" | "human";
+
+/**
+ * task: free-form work; followup: a structured send the tick performs (payload.action);
+ * escalation: a customer conversation handed to the merchant; invoice_draft: owner review;
+ * approval: a side effect a customer asked for, waiting for the merchant; onboarding.
+ */
+export type TaskKind = "task" | "followup" | "escalation" | "invoice_draft" | "approval" | "onboarding";
+
 export type AITaskRow = {
   id: string;
   employee_id: string;
@@ -194,6 +211,11 @@ export type AITaskRow = {
   created_at: string;
   started_at: string | null;
   completed_at: string | null;
+  assignee: TaskAssignee;
+  kind: TaskKind;
+  /** Structured action / provenance (`origin`, `action`, `channel`, `to`, `body`, `decision`, …). */
+  payload: Record<string, unknown> | null;
+  conversation_id: string | null;
 };
 
 export type AIActionRow = {

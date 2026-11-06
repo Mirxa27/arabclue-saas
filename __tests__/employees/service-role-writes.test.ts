@@ -4,7 +4,7 @@
  * service role after their ownership/entitlement checks — scoped to the merchant.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createFakeSupabase, jsonRequest, type FakeHandler, type FakeSupabase } from "../helpers/fake-supabase";
+import { createFakeSupabase, jsonRequest, type FakeHandler, type FakeRpcHandler, type FakeSupabase } from "../helpers/fake-supabase";
 import type { Merchant } from "@/lib/types/database";
 
 const h = vi.hoisted(() => ({
@@ -50,12 +50,21 @@ function merchant(): Merchant {
   };
 }
 
-function useClients(service: FakeHandler, user: FakeHandler) {
-  h.service = createFakeSupabase("service", service);
+function useClients(service: FakeHandler, user: FakeHandler, rpc?: FakeRpcHandler) {
+  h.service = createFakeSupabase("service", service, rpc);
   h.user = createFakeSupabase("user", user);
 }
 
-const ownedEmployee = () => ({ id: EMPLOYEE, merchant_id: h.merchant.id, role_id: "sales-rep", display_name: "Layla" });
+const ownedEmployee = (status = "active") => ({
+  id: EMPLOYEE,
+  merchant_id: h.merchant.id,
+  role_id: "sales-rep",
+  display_name: "Layla",
+  status,
+  billing_status: "trial",
+  trial_ends_at: new Date(Date.now() + 86400_000).toISOString(),
+  next_billing_at: null
+});
 const ctx = { params: Promise.resolve({ id: EMPLOYEE }) };
 
 beforeEach(() => {
@@ -63,17 +72,25 @@ beforeEach(() => {
 });
 
 describe("POST /api/employees (hire)", () => {
-  it("inserts the employee — with its price, trial and billing status — on the service role", async () => {
+  it("hires through the service-role hire_ai_employee RPC — with its price, trial and billing status", async () => {
     useClients(
-      (call) => (call.table === "ai_employees" && call.op === "insert" ? { data: { id: EMPLOYEE, ...(call.payload as object) } } : undefined),
-      (call) => (call.table === "ai_employees" && call.op === "select" ? { count: 0 } : undefined)
+      () => undefined,
+      (call) => (call.table === "ai_employees" && call.op === "select" ? { count: 0 } : undefined),
+      (fn, args) =>
+        fn === "hire_ai_employee"
+          ? { data: { outcome: "hired", employee: { id: EMPLOYEE, merchant_id: args.p_merchant_id, ...(args.p_row as object) } } }
+          : undefined
     );
     const res = await hire(jsonRequest("http://localhost/api/employees", { role_id: "sales-rep", display_name: "Layla" }));
     expect(res.status).toBe(200);
 
-    const insert = h.service.writes().find((w) => w.table === "ai_employees")!;
-    expect(insert.payload).toMatchObject({ merchant_id: h.merchant.id, billing_status: "trial", status: "active" });
-    expect((insert.payload as { monthly_charge_halalas: number }).monthly_charge_halalas).toBeGreaterThan(0);
+    const [rpc] = h.service.rpcCalls;
+    expect(rpc.fn).toBe("hire_ai_employee");
+    expect(rpc.args).toMatchObject({ p_merchant_id: h.merchant.id, p_limit: 5 });
+    expect(rpc.args.p_row).toMatchObject({ billing_status: "trial", status: "active" });
+    expect(rpc.args.p_row).not.toHaveProperty("merchant_id");
+    expect((rpc.args.p_row as { monthly_charge_halalas: number }).monthly_charge_halalas).toBeGreaterThan(0);
+    expect(h.service.writes()).toHaveLength(0);
     expect(h.user.writes().some((w) => w.table === "ai_employees")).toBe(false);
   });
 });
@@ -115,7 +132,7 @@ describe("PATCH /api/employees/:id/status", () => {
   it("toggles status with the service role, scoped to the merchant", async () => {
     useClients(
       (call) => (call.op === "update" ? { data: { id: EMPLOYEE, status: "active", display_name: "Layla", role_id: "sales-rep" } } : undefined),
-      (call) => (call.table === "ai_employees" ? { data: { id: EMPLOYEE } } : undefined)
+      (call) => (call.table === "ai_employees" ? (call.single ? { data: ownedEmployee("paused") } : { count: 1 }) : undefined)
     );
     const res = await patchStatus(jsonRequest(`http://localhost/api/employees/${EMPLOYEE}/status`, { status: "active" }, { method: "PATCH" }), ctx);
     expect(res.status).toBe(200);

@@ -77,6 +77,23 @@ export async function registerTelegramWebhook(
   }
 }
 
+/** Stop Telegram from delivering to us (on disconnect). Never throws; reports whether Telegram agreed. */
+export async function deleteTelegramWebhook(creds: Pick<TelegramCredentials, "bot_token">): Promise<boolean> {
+  if (!creds.bot_token) return false;
+  try {
+    const res = await fetch(endpoint(creds.bot_token, "deleteWebhook"), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ drop_pending_updates: true }),
+      signal: AbortSignal.timeout(10_000)
+    });
+    const json = (await res.json().catch(() => ({}))) as { ok?: boolean };
+    return res.ok && json.ok === true;
+  } catch {
+    return false;
+  }
+}
+
 export function parseTelegramUpdate(payload: unknown): TelegramIncoming | null {
   if (!payload || typeof payload !== "object") return null;
   const update = payload as {

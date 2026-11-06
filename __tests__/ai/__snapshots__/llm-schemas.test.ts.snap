@@ -309,6 +309,10 @@ exports[`LLM structured-output schemas (wire format) > ToolDecisionSchema matche
   "$schema": "http://json-schema.org/draft-07/schema#",
   "additionalProperties": false,
   "properties": {
+    "approval_summary": {
+      "maxLength": 1000,
+      "type": "string",
+    },
     "body": {
       "maxLength": 4000,
       "type": "string",
@@ -323,9 +327,11 @@ exports[`LLM structured-output schemas (wire format) > ToolDecisionSchema matche
       "type": "array",
     },
     "calendar_end": {
+      "maxLength": 40,
       "type": "string",
     },
     "calendar_start": {
+      "maxLength": 40,
       "type": "string",
     },
     "calendar_summary": {
@@ -413,6 +419,7 @@ exports[`LLM structured-output schemas (wire format) > ToolDecisionSchema matche
         "lookup_salla_order",
         "create_invoice",
         "escalate_to_human",
+        "request_approval",
       ],
       "type": "string",
     },
