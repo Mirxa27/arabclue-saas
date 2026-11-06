@@ -3,7 +3,7 @@ import { exchangeCodeForTokens, fetchSallaStoreInfo, fetchSallaUserInfo, type Sa
 import { sallaOAuthRedirectConfig } from "@/lib/salla/config";
 import { encryptSallaTokens, linkSallaStore } from "@/lib/salla/connect";
 import { getServiceSupabase } from "@/lib/db/supabase";
-import { updateAgentStatus } from "@/lib/agents/store-server";
+import { enableSocialAgentOnFirstConnect } from "@/lib/social/gates";
 import { runOAuthCallback } from "@/lib/oauth/flow";
 import { OAuthCallbackError } from "@/lib/oauth/errors";
 import { handleRouteError } from "@/lib/api/route-handler";
@@ -57,8 +57,9 @@ export async function GET(req: NextRequest) {
         if (outcome !== "linked") throw new OAuthCallbackError("save_failed");
 
         try {
-          // Only switches the agent on when the merchant's plan includes the social module (RA-12).
-          await updateAgentStatus(merchantId, "social", true);
+          // Only switches the agent on when the merchant's plan includes the social module (RA-12),
+          // and only on the first connect: a reconnect never re-enables a paused agent (SW-11).
+          await enableSocialAgentOnFirstConnect(merchantId);
         } catch {
           /* non-critical: the store is connected either way */
         }

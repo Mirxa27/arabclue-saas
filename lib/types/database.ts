@@ -88,7 +88,7 @@ export type Invoice = InvoiceSummary & {
   fatoora_response: Record<string, unknown> | null;
 };
 
-export type SocialPostStatus = "scheduled" | "publishing" | "published" | "failed" | "canceled";
+export type SocialPostStatus = "draft" | "scheduled" | "publishing" | "published" | "failed" | "canceled";
 
 export type SocialPostSummary = {
   id: string;

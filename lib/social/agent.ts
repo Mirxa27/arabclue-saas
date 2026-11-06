@@ -1,20 +1,19 @@
 /**
  * arabclue social agent system.
  *
- * Five composable agents:
- *   1. planner    — builds a 30-day content grid from catalog + calendar + brand voice
+ * LLM agents:
+ *   1. planner    — builds a content grid from catalog + calendar + brand voice
  *   2. copywriter — writes per-platform captions in Khaliji / MSA / English
  *   3. visualist  — produces a layout brief for carousels, stories, reels
- *   4. scheduler  — queues posts to the platform connectors at the right time
- *   5. engager    — replies to incoming DMs / comments in dialect, escalates when needed
+ *   4. engager    — replies to incoming DMs / comments in dialect, escalates when needed
  *
- * Each agent is a pure async function that takes typed input and returns typed output.
- * Composition happens in `runSocialPipeline` below. The scheduler/engager have side effects
- * (writes to DB, calls platform APIs); the others are pure planning.
+ * Each agent is an async function from typed input to typed output. Plan generation (bounded
+ * fan-out, validation, drafts) lives in ./plan.ts; publishing (claims, per-platform outcomes)
+ * in ./scheduler.ts.
  */
-import { aiStructured, aiText } from "@/lib/ai/providers";
+import { aiStructured } from "@/lib/ai/providers";
 import { getPersona } from "@/lib/agents/personas";
-import { nextSignificantEvents } from "./calendar";
+import { eventsBetween, nextSignificantEvents } from "./calendar";
 import {
   CopySchema,
   PlannedPostSchema,
@@ -25,9 +24,9 @@ import {
   type Dialect,
   type PlannedPost,
   type Platform,
-  type PlatformConnector,
   type Product,
   type ReplyDecision,
+  type SaudiCalendarEvent,
   type VisualBrief
 } from "./types";
 import { z } from "zod";
@@ -36,20 +35,55 @@ import { z } from "zod";
 // 1. PLANNER
 // ─────────────────────────────────────────────────────────────────────────────
 
+export const PLANNER_MAX_POSTS = 40;
+
 export const PlannerOutputSchema = z.object({
-  posts: z.array(PlannedPostSchema).min(8).max(40)
+  posts: z.array(PlannedPostSchema).min(1).max(PLANNER_MAX_POSTS)
 });
+
+/** Output-token budget for `target` posts (~110–130 tokens per compact post + overhead). */
+export function plannerMaxTokens(target: number): number {
+  return Math.min(8000, 400 + 140 * Math.max(1, target));
+}
+
+const RIYADH_FORMAT = new Intl.DateTimeFormat("en-GB", {
+  timeZone: "Asia/Riyadh",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: false
+});
+
+/** "2026-11-06T15:00:00+03:00" for an instant (Asia/Riyadh has no DST). */
+export function riyadhTimestamp(at: Date): string {
+  const parts = Object.fromEntries(RIYADH_FORMAT.formatToParts(at).map((p) => [p.type, p.value]));
+  const hour = parts.hour === "24" ? "00" : parts.hour;
+  return `${parts.year}-${parts.month}-${parts.day}T${hour}:${parts.minute}:00+03:00`;
+}
+
+/** Calendar events the planner sees: the window (+1 week), or the next few when it is quiet. */
+export function plannerEvents(start: Date, end: Date): SaudiCalendarEvent[] {
+  const inWindow = eventsBetween(start, new Date(end.getTime() + 7 * 24 * 3600_000));
+  const events = inWindow.length >= 3 ? inWindow : nextSignificantEvents(start, 6);
+  return events.slice(0, 20);
+}
 
 export async function planner(input: {
   brand: BrandVoice;
   products: Product[];
-  horizon: { startISO: string; days: number };
+  /** Posts must be scheduled inside [startISO, endISO]. */
+  window: { startISO: string; endISO: string; days: number };
   platforms: Platform[];
-  postsPerWeek?: number;
+  postsPerWeek: number;
+  /** How many posts to produce: round(postsPerWeek × days / 7), at most PLANNER_MAX_POSTS. */
+  target: number;
 }): Promise<PlannedPost[]> {
-  const events = nextSignificantEvents(new Date(input.horizon.startISO), 6);
-  const postsPerWeek = input.postsPerWeek ?? 5;
-  const target = Math.round((postsPerWeek * input.horizon.days) / 7);
+  const start = new Date(input.window.startISO);
+  const end = new Date(input.window.endISO);
+  const events = plannerEvents(start, end);
+  const target = Math.min(Math.max(1, input.target), PLANNER_MAX_POSTS);
   const noora = getPersona("social");
 
   const system = `
@@ -65,8 +99,18 @@ Rules:
 - ~60% product/conversion, ~25% brand/storytelling, ~15% engagement/community.
 - Do NOT post sales content during the first 10 days of Ramadan or on the morning of Eid.
 - Spread platforms; do not blast every post to every channel — pick the right channel per goal.
-- Output ${target} planned posts across the ${input.horizon.days}-day horizon.
+- Use only these platforms: ${input.platforms.join(", ")}.
+- An instagram post must reference at least one product marked [img] (Instagram posts need a catalog photo).
+- Output exactly ${target} planned posts (${input.postsPerWeek} per week across the ${input.window.days}-day horizon).
+- Every scheduledFor must be an ISO 8601 timestamp with the +03:00 offset (Asia/Riyadh),
+  no earlier than ${riyadhTimestamp(start)} and no later than ${riyadhTimestamp(end)}.
   `.trim();
+
+  const catalog = input.products
+    .slice(0, 30)
+    .map((p) => `- ${p.id} · ${p.name} · ${p.category} · ${p.price} ${p.currency}${p.imageUrl ? " [img]" : ""}`)
+    .join("\n");
+  const calendar = events.map((e) => `- ${e.date} · ${e.arabicName} (${e.name}) · importance=${e.importance}`).join("\n");
 
   const prompt = `
 BRAND
@@ -78,16 +122,21 @@ BRAND
 PLATFORMS ENABLED
 ${input.platforms.join(", ")}
 
-PRODUCT CATALOG (sample of ${input.products.length})
-${input.products.slice(0, 30).map((p) => `- ${p.id} · ${p.name} · ${p.category} · ${p.price} ${p.currency}`).join("\n")}
+PRODUCT CATALOG (sample of ${input.products.length}; [img] = has a photo)
+${catalog || "(no products synced yet — plan brand and community posts)"}
 
-UPCOMING SAUDI CALENDAR EVENTS
-${events.map((e) => `- ${e.date} · ${e.arabicName} (${e.name}) · importance=${e.importance}`).join("\n")}
+UPCOMING SAUDI CALENDAR EVENTS (Asia/Riyadh dates; Hijri dates may move by a day after the moon sighting)
+${calendar}
 
-HORIZON: ${input.horizon.startISO} → ${input.horizon.days} days
+WINDOW: ${riyadhTimestamp(start)} → ${riyadhTimestamp(end)} (${input.window.days} days)
   `.trim();
 
-  const result = await aiStructured(PlannerOutputSchema, { system, prompt, temperature: 0.5 });
+  const result = await aiStructured(PlannerOutputSchema, {
+    system,
+    prompt,
+    temperature: 0.5,
+    maxTokens: plannerMaxTokens(target)
+  });
   return result.posts;
 }
 
@@ -101,12 +150,14 @@ export async function copywriter(input: {
   product?: Product;
   platform: Platform;
   dialect?: Dialect;
+  /** Why the previous attempt was rejected (e.g. over X's 280 weighted characters). */
+  feedback?: string;
 }): Promise<Copy> {
   const dialect = input.dialect ?? input.brand.dialect;
   const platformRules: Record<Platform, string> = {
     instagram: "Caption up to 220 words. Use 6-10 niche hashtags. No link in body — say 'link in bio'.",
     tiktok: "Hook in first 8 words. Vertical-video framing. 3-5 hashtags. Conversational.",
-    x: "Max 240 chars in Arabic (denser than English). One link allowed. 1-2 hashtags only.",
+    x: "At most 240 characters in total — X counts every emoji as 2 and every link as 23, and 280 is the hard limit. One link allowed. 1-2 hashtags only.",
     snapchat: "Punchy, story-style. Big bold emoji okay. No hashtags.",
     linkedin: "Professional but warm. 80-180 words. 3 hashtags. Saudi business context.",
     whatsapp: "Short, direct, broadcast-list tone. Up to 5 lines. CTA in last line."
@@ -138,18 +189,23 @@ Cultural rules:
 - Saudi National Day (Sep 23) and Founding Day (Feb 22): patriotic register acceptable but not forced.
   `.trim();
 
-  const prompt = `
-POST INTENT
-- Goal: ${input.post.goal}
-- Hook line: ${input.post.hook}
-- Rationale: ${input.post.rationale}
-${input.product ? `
+  const product = input.product
+    ? `
 PRODUCT
 - Name: ${input.product.arabicName ?? input.product.name}
 - Description: ${input.product.description}
 - Price: ${input.product.price} ${input.product.currency}
 - URL: ${input.product.url ?? "(use link in bio)"}
-` : "(brand/community post — no specific product)"}
+`
+    : "(brand/community post — no specific product)";
+
+  const prompt = `
+POST INTENT
+- Goal: ${input.post.goal}
+- Hook line: ${input.post.hook}
+- Rationale: ${input.post.rationale}
+${product}
+${input.feedback ? `REVISION NEEDED: ${input.feedback}` : ""}
   `.trim();
 
   return aiStructured(CopySchema, { system, prompt, temperature: 0.7 });
@@ -169,95 +225,21 @@ export async function visualist(input: {
 You are the visualist agent. Produce a layout brief for an ${input.platform} post.
 Output specifies layout type, ordered slides, and a palette cue that downstream image
 generation or a human designer can execute. Keep slides ≤ 8 for carousels, ≤ 3 for stories.
+Reference products by productId only; never invent image URLs.
   `.trim();
 
   const prompt = `
 Post goal: ${input.post.goal}
 Hook: ${input.post.hook}
 Brand: ${input.brand.name} — ${input.brand.essence}
-${input.product ? `Product: ${input.product.name} (${input.product.category}) — image: ${input.product.imageUrl ?? "n/a"}` : ""}
+${input.product ? `Product: ${input.product.id} · ${input.product.name} (${input.product.category}) — catalog photo: ${input.product.imageUrl ? "yes" : "no"}` : ""}
   `.trim();
 
   return aiStructured(VisualBriefSchema, { system, prompt, temperature: 0.6 });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 4. SCHEDULER (side-effecting)
-// ─────────────────────────────────────────────────────────────────────────────
-
-export type ScheduledPost = {
-  id: string;
-  merchantId?: string;
-  post: PlannedPost;
-  copies: Partial<Record<Platform, Copy>>;
-  visualBrief?: VisualBrief;
-  status: "scheduled" | "publishing" | "published" | "failed";
-  publishedAt?: string;
-  error?: string;
-};
-
-export interface SocialStore {
-  upsertPost(p: ScheduledPost): Promise<void>;
-  listDue(beforeISO: string): Promise<ScheduledPost[]>;
-  /** `note` records platforms that were skipped when only some targets were published. */
-  markPublished(id: string, when: string, remoteIds?: Record<string, string>, note?: string): Promise<void>;
-  markFailed(id: string, error: string): Promise<void>;
-}
-
-export async function scheduler(opts: {
-  store: SocialStore;
-  connectors?: PlatformConnector[];
-  connectorsForMerchant?: (merchantId: string) => PlatformConnector[] | Promise<PlatformConnector[]>;
-  now?: Date;
-}) {
-  const nowISO = (opts.now ?? new Date()).toISOString();
-  const due = await opts.store.listDue(nowISO);
-  const results: { id: string; ok: boolean; error?: string }[] = [];
-
-  for (const sp of due) {
-    try {
-      const connectors =
-        sp.merchantId && opts.connectorsForMerchant
-          ? await opts.connectorsForMerchant(sp.merchantId)
-          : (opts.connectors ?? []);
-
-      const remoteIds: Record<string, string> = {};
-      const skipped: string[] = [];
-      for (const platform of sp.post.platforms) {
-        const conn = connectors.find((c) => c.platform === platform);
-        const copy = sp.copies[platform];
-        if (!conn) {
-          skipped.push(`${platform}: account not connected`);
-          continue;
-        }
-        if (!copy) {
-          skipped.push(`${platform}: no copy for this platform`);
-          continue;
-        }
-        const { remoteId } = await conn.publish({ copy, visualBrief: sp.visualBrief });
-        remoteIds[platform] = remoteId;
-      }
-      // Never report a post as published when nothing went out.
-      if (Object.keys(remoteIds).length === 0) {
-        const msg = `Not published — ${skipped.join("; ") || "no target platforms"}`;
-        await opts.store.markFailed(sp.id, msg);
-        results.push({ id: sp.id, ok: false, error: msg });
-        continue;
-      }
-      const note = skipped.length ? `Partially published — skipped ${skipped.join("; ")}` : undefined;
-      await opts.store.markPublished(sp.id, new Date().toISOString(), remoteIds, note);
-      results.push({ id: sp.id, ok: true, ...(note ? { error: note } : {}) });
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      await opts.store.markFailed(sp.id, msg);
-      results.push({ id: sp.id, ok: false, error: msg });
-    }
-  }
-  return results;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// 5. ENGAGER
+// 4. ENGAGER
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function engager(input: {
@@ -297,35 +279,4 @@ ${input.context.productMentioned ? `Product mentioned: ${input.context.productMe
   `.trim();
 
   return aiStructured(ReplyDecisionSchema, { system, prompt, temperature: 0.4 });
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// COMPOSITION — full pipeline
-// ─────────────────────────────────────────────────────────────────────────────
-
-export async function runSocialPipeline(input: {
-  brand: BrandVoice;
-  products: Product[];
-  platforms: Platform[];
-  horizonDays: number;
-}) {
-  const horizon = { startISO: new Date().toISOString(), days: input.horizonDays };
-  const plan = await planner({ brand: input.brand, products: input.products, horizon, platforms: input.platforms });
-
-  const fleshed = await Promise.all(
-    plan.map(async (post) => {
-      const product = post.productIds[0]
-        ? input.products.find((p) => p.id === post.productIds[0])
-        : undefined;
-
-      const copies: Partial<Record<Platform, Copy>> = {};
-      for (const platform of post.platforms) {
-        copies[platform] = await copywriter({ post, brand: input.brand, product, platform });
-      }
-      const visualBrief = await visualist({ post, brand: input.brand, product, platform: post.platforms[0] });
-      return { post, copies, visualBrief };
-    })
-  );
-
-  return fleshed;
 }

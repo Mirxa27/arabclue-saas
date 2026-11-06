@@ -4,6 +4,7 @@ import { buildLinkedInAuthorizeURL } from "@/lib/linkedin/oauth";
 import { beginOAuthFlow, envValue, oauthStartFailure } from "@/lib/oauth/flow";
 import { handleRouteError } from "@/lib/api/route-handler";
 import { enforceRateLimit } from "@/lib/security/rate-limit";
+import { socialConnectBlock } from "@/lib/social/gates";
 
 export const dynamic = "force-dynamic";
 
@@ -16,6 +17,10 @@ export async function GET(req: NextRequest) {
 
     const session = await requireMerchantForNavigation(req);
     if (!session.ok) return session.response;
+
+    // SW-13: the plan and the admin's "Social OAuth" kill switch gate every social connect.
+    const blocked = await socialConnectBlock(session.merchant);
+    if (blocked) return oauthStartFailure("linkedin", blocked);
 
     const clientId = envValue("LINKEDIN_CLIENT_ID");
     if (!clientId) return oauthStartFailure("linkedin", "not_configured");

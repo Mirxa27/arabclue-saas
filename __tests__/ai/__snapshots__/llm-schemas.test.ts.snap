@@ -118,6 +118,8 @@ exports[`LLM structured-output schemas (wire format) > PlannedPostSchema matches
         ],
         "type": "string",
       },
+      "maxItems": 6,
+      "minItems": 1,
       "type": "array",
     },
     "productIds": {
@@ -132,7 +134,7 @@ exports[`LLM structured-output schemas (wire format) > PlannedPostSchema matches
       "type": "string",
     },
     "scheduledFor": {
-      "description": "ISO timestamp",
+      "description": "ISO 8601 timestamp with the +03:00 offset, inside the allowed window",
       "type": "string",
     },
   },
@@ -183,6 +185,8 @@ exports[`LLM structured-output schemas (wire format) > PlannerOutputSchema match
               ],
               "type": "string",
             },
+            "maxItems": 6,
+            "minItems": 1,
             "type": "array",
           },
           "productIds": {
@@ -197,7 +201,7 @@ exports[`LLM structured-output schemas (wire format) > PlannerOutputSchema match
             "type": "string",
           },
           "scheduledFor": {
-            "description": "ISO timestamp",
+            "description": "ISO 8601 timestamp with the +03:00 offset, inside the allowed window",
             "type": "string",
           },
         },
@@ -212,7 +216,7 @@ exports[`LLM structured-output schemas (wire format) > PlannerOutputSchema match
         "type": "object",
       },
       "maxItems": 40,
-      "minItems": 8,
+      "minItems": 1,
       "type": "array",
     },
   },
@@ -450,10 +454,6 @@ exports[`LLM structured-output schemas (wire format) > VisualBriefSchema matches
         "additionalProperties": false,
         "properties": {
           "headline": {
-            "type": "string",
-          },
-          "imageUrl": {
-            "format": "uri",
             "type": "string",
           },
           "kind": {

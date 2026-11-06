@@ -4,6 +4,7 @@ import { buildMetaAuthorizeURL, type MetaOAuthTarget } from "@/lib/meta/oauth";
 import { beginOAuthFlow, envValue, oauthStartFailure } from "@/lib/oauth/flow";
 import { handleRouteError } from "@/lib/api/route-handler";
 import { enforceRateLimit } from "@/lib/security/rate-limit";
+import { socialConnectBlock } from "@/lib/social/gates";
 
 export const dynamic = "force-dynamic";
 
@@ -21,6 +22,10 @@ export async function GET(req: NextRequest) {
     if (target !== "instagram" && target !== "whatsapp") {
       return oauthStartFailure("meta", "invalid_request");
     }
+
+    // SW-13: the plan and the admin's "Social OAuth" kill switch gate every social connect.
+    const blocked = await socialConnectBlock(session.merchant);
+    if (blocked) return oauthStartFailure(target, blocked);
 
     const appId = envValue("META_APP_ID");
     if (!appId) return oauthStartFailure(target, "not_configured");

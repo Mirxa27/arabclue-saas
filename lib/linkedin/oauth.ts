@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { oauthCallbackUri } from "@/lib/oauth/redirect-uri";
+import { LINKEDIN_REST_BASE, linkedInRestHeaders } from "@/lib/linkedin/api";
 
 const TokenSchema = z.object({
   access_token: z.string(),
@@ -39,17 +40,15 @@ export async function exchangeLinkedInCode(code: string): Promise<z.infer<typeof
 }
 
 export async function resolveLinkedInActorUrn(accessToken: string): Promise<string> {
-  const res = await fetch(
-    "https://api.linkedin.com/rest/organizationAcls?q=roleAssignee&role=ADMINISTRATOR&state=APPROVED",
-    {
-      headers: {
-        authorization: `Bearer ${accessToken}`,
-        "LinkedIn-Version": "202410",
-        "X-Restli-Protocol-Version": "2.0.0"
-      }
-    }
-  );
-  if (!res.ok) throw new Error(`LinkedIn org lookup failed: ${res.status}`);
+  const res = await fetch(`${LINKEDIN_REST_BASE}/organizationAcls?q=roleAssignee&role=ADMINISTRATOR&state=APPROVED`, {
+    headers: linkedInRestHeaders(accessToken),
+    signal: AbortSignal.timeout(15_000)
+  });
+  if (!res.ok) {
+    // 426 NONEXISTENT_VERSION means LINKEDIN_API_VERSION was sunset (lib/linkedin/api.ts).
+    const code = res.status === 426 ? " (API version no longer supported)" : "";
+    throw new Error(`LinkedIn org lookup failed: ${res.status}${code}`);
+  }
   const data = z
     .object({
       elements: z.array(z.object({ organization: z.string() }))

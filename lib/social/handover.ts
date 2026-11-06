@@ -1,5 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { engager } from "@/lib/social/agent";
+import { reportError } from "@/lib/observability/error-reporter";
+import { socialInboundGate, type InboundGate } from "@/lib/social/gates";
 import type { BrandVoice, Platform, ReplyDecision } from "@/lib/social/types";
 
 export type InboundSocialMessage = {
@@ -10,9 +12,13 @@ export type InboundSocialMessage = {
   text: string;
 };
 
+export type InboundSkipReason = Extract<InboundGate, { allowed: false }>["reason"];
+
 export type HandoverResult = {
   decision: ReplyDecision;
   eventId?: string;
+  /** Set when the engager was not run (admin kill switch, plan, or the merchant paused the agent). */
+  skipped?: InboundSkipReason;
 };
 
 async function loadBrandVoice(supabase: SupabaseClient, merchantId: string): Promise<BrandVoice> {
@@ -36,11 +42,29 @@ async function loadBrandVoice(supabase: SupabaseClient, merchantId: string): Pro
   };
 }
 
-/** Run engager agent and persist escalation events for human handover (voice ops desk). */
+/**
+ * Run the engager agent and persist escalation events for human handover (voice ops desk).
+ *
+ * SW-11 / SW-13: the engager is an LLM call on the platform's key, so it runs only while the
+ * admin's social agent switch is on, the merchant's plan includes social and the merchant's own
+ * social agent is switched on. Otherwise the message is acknowledged without an LLM call and a
+ * `social.inbound.skipped` event (no message text) records why.
+ */
 export async function processSocialInbound(
   supabase: SupabaseClient,
   msg: InboundSocialMessage
 ): Promise<HandoverResult> {
+  const gate = await socialInboundGate(supabase, msg.merchantId);
+  if (!gate.allowed) {
+    const { error } = await supabase.from("events").insert({
+      kind: "social.inbound.skipped",
+      merchant: msg.merchantId,
+      payload: { platform: msg.platform, kind: msg.kind, reason: gate.reason, at: new Date().toISOString() }
+    });
+    if (error) reportError(new Error(`social.inbound.skipped event failed: ${error.message}`), { merchantId: msg.merchantId });
+    return { decision: { action: "ignore", reason: `engager not run: ${gate.reason}` }, skipped: gate.reason };
+  }
+
   const brand = await loadBrandVoice(supabase, msg.merchantId);
   const decision = await engager({
     brand,

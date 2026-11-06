@@ -11,12 +11,14 @@ import { NextRequest } from "next/server";
 import { setCookies } from "../helpers/fake-gotrue";
 import { fakeSupabase, type QueryResult } from "../helpers/fake-supabase";
 
-const MERCHANT_A = { id: "aaaaaaaa-0000-4000-8000-00000000000a", owner_user_id: "user-a" };
-const MERCHANT_B = { id: "bbbbbbbb-0000-4000-8000-00000000000b", owner_user_id: "user-b" };
+// Entitled merchants: social connects are gated on the plan + the admin switch (SW-13,
+// covered in __tests__/social/oauth-gates.test.ts).
+const MERCHANT_A = { id: "aaaaaaaa-0000-4000-8000-00000000000a", owner_user_id: "user-a", plan: "plus", subscription_status: "active" };
+const MERCHANT_B = { id: "bbbbbbbb-0000-4000-8000-00000000000b", owner_user_id: "user-b", plan: "plus", subscription_status: "active" };
 
 const auth = vi.hoisted(() => ({
   user: null as null | { id: string },
-  merchant: null as null | { id: string; owner_user_id: string }
+  merchant: null as null | { id: string; owner_user_id: string; plan?: string; subscription_status?: string }
 }));
 const db = vi.hoisted(() => ({ results: {} as Record<string, QueryResult> }));
 const providers = vi.hoisted(() => ({
@@ -43,6 +45,9 @@ vi.mock("@/lib/db/supabase", async (importOriginal) => ({
   getServiceSupabase: () => service.client
 }));
 vi.mock("@/lib/agents/store-server", () => ({ updateAgentStatus: providers.updateAgentStatus }));
+vi.mock("@/lib/admin/platform-settings", () => ({
+  getFeatureSettings: vi.fn(async () => ({ billing: true, zatca: true, wathq: true, socialOAuth: true }))
+}));
 vi.mock("@/lib/linkedin/oauth", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/linkedin/oauth")>()),
   exchangeLinkedInCode: providers.exchangeLinkedInCode,
@@ -105,7 +110,7 @@ beforeEach(() => {
     META_APP_SECRET: "meta-secret"
   })) vi.stubEnv(k, v);
   signIn(MERCHANT_A);
-  db.results = { social_channels: { error: null } };
+  db.results = { social_channels: { error: null }, merchants: { data: { plan: "plus", subscription_status: "active" }, error: null } };
   service = fakeSupabase(db.results);
   Object.values(providers).forEach((fn) => fn.mockReset());
   reportError.mockReset();

@@ -1,34 +1,42 @@
 "use client";
 
-import { useEffect, useState, useMemo } from "react";
+import { useCallback, useEffect, useState, useMemo } from "react";
 import { PageShell } from "@/components/dashboard/page-shell";
 import { PageIntro } from "@/components/dashboard/page-intro";
-import {
-  Badge,
-  Card,
-  CardHeader,
-  CardSubtitle,
-  CardTitle,
-  Empty,
-} from "@/components/ui/primitives";
+import { Badge, Card, Empty } from "@/components/ui/primitives";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/toast";
 import { apiFetch, ApiClientError } from "@/lib/api/client";
 import { getBrowserSupabase } from "@/lib/db/supabase-browser";
 import { useMerchant } from "@/hooks/use-merchant";
 import { SocialPostDrawer } from "@/components/dashboard/social-post-drawer";
+import { SOCIAL_STATUS_TEXT, socialStatusTone } from "@/components/dashboard/social-status";
 import type { SocialPostSummary } from "@/lib/types/database";
-import {
-  Sparkles,
-  CalendarDays,
-  CalendarClock,
-  ListFilter,
-  BarChart3,
-} from "lucide-react";
-import { format, parseISO, isSameDay, addDays, startOfDay, isToday } from "date-fns";
+import { Sparkles, CalendarDays, CalendarClock, ListFilter, BarChart3, FileEdit, AlertTriangle } from "lucide-react";
+import { format, parseISO, addDays, startOfDay, isToday } from "date-fns";
 
 type ViewMode = "list" | "week";
-type FilterStatus = "all" | "scheduled" | "published" | "failed";
+type FilterStatus = "all" | "draft" | "scheduled" | "published" | "failed" | "canceled";
+
+type PlanResponse = { ok: true; count: number; instagramRemoved?: number };
+
+const FILTER_TEXT: Record<FilterStatus, { ar: string; en: string }> = {
+  all: { ar: "الكل", en: "all" },
+  draft: SOCIAL_STATUS_TEXT.draft,
+  scheduled: SOCIAL_STATUS_TEXT.scheduled,
+  published: SOCIAL_STATUS_TEXT.published,
+  failed: SOCIAL_STATUS_TEXT.failed,
+  canceled: SOCIAL_STATUS_TEXT.canceled
+};
+
+function StatusBadge({ status, className }: { status: SocialPostSummary["status"]; className?: string }) {
+  const text = SOCIAL_STATUS_TEXT[status] ?? { ar: status, en: status };
+  return (
+    <Badge tone={socialStatusTone(status)} className={className}>
+      <span className="font-arabic" lang="ar">{text.ar}</span> · {text.en}
+    </Badge>
+  );
+}
 
 export default function SocialPage() {
   const { merchant, error: merchantError } = useMerchant();
@@ -39,67 +47,100 @@ export default function SocialPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [view, setView] = useState<ViewMode>("list");
   const [statusFilter, setStatusFilter] = useState<FilterStatus>("all");
+  const [agentOn, setAgentOn] = useState<boolean | null>(null);
 
   useEffect(() => {
     if (merchantError) toast(merchantError, "error");
   }, [merchantError, toast]);
+
+  const loadPosts = useCallback(async () => {
+    if (!merchant) return;
+    setPostsLoading(true);
+    try {
+      const sb = getBrowserSupabase();
+      const [{ data, error }, agent] = await Promise.all([
+        sb
+          .from("social_posts")
+          .select("id, scheduled_for, platforms, hook, goal, status")
+          .eq("merchant_id", merchant.id)
+          .order("scheduled_for", { ascending: true })
+          .limit(120),
+        sb
+          .from("agent_settings")
+          .select("enabled, status")
+          .eq("merchant_id", merchant.id)
+          .eq("persona_role", "social")
+          .maybeSingle()
+      ]);
+      if (error) throw error;
+      setPosts((data ?? []) as SocialPostSummary[]);
+      const row = agent.data as { enabled?: boolean; status?: string } | null;
+      setAgentOn(agent.error ? null : Boolean(row?.enabled && row.status !== "paused"));
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "تعذّر تحميل المنشورات · Failed to load posts", "error");
+    } finally {
+      setPostsLoading(false);
+    }
+  }, [merchant, toast]);
 
   useEffect(() => {
     if (!merchant) {
       setPostsLoading(false);
       return;
     }
-    (async () => {
-      setPostsLoading(true);
-      try {
-        const sb = getBrowserSupabase();
-        const { data, error } = await sb
-          .from("social_posts")
-          .select("id, scheduled_for, platforms, hook, goal, status")
-          .eq("merchant_id", merchant.id)
-          .order("scheduled_for", { ascending: true })
-          .limit(90);
-        if (error) throw error;
-        setPosts((data ?? []) as SocialPostSummary[]);
-      } catch (err) {
-        toast(err instanceof Error ? err.message : "Failed to load posts", "error");
-      } finally {
-        setPostsLoading(false);
-      }
-    })();
-  }, [merchant, toast]);
+    void loadPosts();
+  }, [merchant, loadPosts]);
 
-  async function generate() {
+  async function generate(replaceDrafts = false) {
     setGenerating(true);
     try {
-      await apiFetch("/api/social/plan", {
+      const res = await apiFetch<PlanResponse>("/api/social/plan", {
         method: "POST",
-        body: JSON.stringify({ horizonDays: 30, postsPerWeek: 5 }),
+        body: JSON.stringify({ horizonDays: 30, postsPerWeek: 5, ...(replaceDrafts ? { replaceDrafts: true } : {}) })
       });
-      toast("30-day social plan generated", "success");
-      window.location.reload();
+      toast(
+        `أُنشئت ${res.count} مسودة — راجعها ووافق عليها قبل النشر · ${res.count} draft posts generated — review and approve them before they publish`,
+        "success"
+      );
+      await loadPosts();
+      setStatusFilter("draft");
     } catch (err) {
-      toast(err instanceof ApiClientError ? err.message : "Generation failed", "error");
+      if (err instanceof ApiClientError && err.status === 409 && !replaceDrafts && /draft/i.test(err.message)) {
+        if (
+          confirm(
+            "لديك مسودات لم تُعتمد من خطة سابقة. هل تريد استبدالها بخطة جديدة؟ · You have unapproved drafts from an earlier plan. Replace them with a new plan?"
+          )
+        ) {
+          setGenerating(false);
+          await generate(true);
+          return;
+        }
+      } else {
+        toast(err instanceof ApiClientError ? err.message : "تعذّر إنشاء الخطة · Generation failed", "error");
+      }
     } finally {
       setGenerating(false);
     }
   }
 
   function handleUpdated(patch: Partial<SocialPostSummary> & { id: string }) {
-    setPosts((prev) =>
-      prev.map((p) => (p.id === patch.id ? { ...p, ...patch } : p))
-    );
+    setPosts((prev) => prev.map((p) => (p.id === patch.id ? { ...p, ...patch } : p)));
   }
 
   function handleDeleted(id: string) {
     setPosts((prev) => prev.filter((p) => p.id !== id));
   }
 
+  function handleRestored(post: SocialPostSummary) {
+    setPosts((prev) =>
+      prev.some((p) => p.id === post.id)
+        ? prev
+        : [...prev, post].sort((a, b) => a.scheduled_for.localeCompare(b.scheduled_for))
+    );
+  }
+
   const filtered = useMemo(
-    () =>
-      statusFilter === "all"
-        ? posts
-        : posts.filter((p) => p.status === statusFilter),
+    () => (statusFilter === "all" ? posts : posts.filter((p) => p.status === statusFilter)),
     [posts, statusFilter]
   );
 
@@ -119,31 +160,19 @@ export default function SocialPage() {
   }, [filtered]);
 
   const summary = {
-    total: posts.length,
+    drafts: posts.filter((p) => p.status === "draft").length,
     scheduled: posts.filter((p) => p.status === "scheduled").length,
     published: posts.filter((p) => p.status === "published").length,
     thisWeek: posts.filter(
-      (p) =>
-        parseISO(p.scheduled_for) >= today &&
-        parseISO(p.scheduled_for) < addDays(today, 7)
-    ).length,
+      (p) => parseISO(p.scheduled_for) >= today && parseISO(p.scheduled_for) < addDays(today, 7)
+    ).length
   };
 
-  const STAT_TONES: Record<string, "success" | "danger" | "warn" | "default"> =
-    {
-      scheduled: "warn",
-      published: "success",
-      failed: "danger",
-      generating: "default",
-      publishing: "default",
-      canceled: "default",
-    };
-
   const statCards = [
-    { label: "Total posts", icon: BarChart3, value: summary.total },
-    { label: "This week", icon: CalendarClock, value: summary.thisWeek },
-    { label: "Scheduled", icon: CalendarDays, value: summary.scheduled },
-    { label: "Live", icon: Sparkles, value: summary.published },
+    { label: "Drafts to review · مسودات", icon: FileEdit, value: summary.drafts },
+    { label: "This week · هذا الأسبوع", icon: CalendarClock, value: summary.thisWeek },
+    { label: "Scheduled · مجدول", icon: CalendarDays, value: summary.scheduled },
+    { label: "Live · منشور", icon: BarChart3, value: summary.published }
   ] as const;
 
   return (
@@ -155,15 +184,29 @@ export default function SocialPage() {
           <PageIntro
             kicker="Agentic social"
             title="Content calendar"
-            description="Plan, review, and publish posts across your connected channels. Generate a 30-day grid from your brand kit, then edit hooks and captions before they go live."
-            descriptionAr="خطّط وراجع وجدول المنشورات على قنواتك. أنشئ شبكة ٣٠ يوماً من هوية متجرك ثم عدّل النصوص قبل النشر."
+            description="Generate a 30-day plan from your brand kit for your connected Instagram, X and LinkedIn accounts. Every generated post is a draft: review each platform's caption, then approve it — nothing publishes before you do."
+            descriptionAr="أنشئ خطة ٣٠ يومًا من هوية متجرك لحساباتك المربوطة في إنستغرام وإكس ولينكدإن. كل منشور يُنشأ كمسودة: راجع نص كل منصّة ثم وافق عليه — لا يُنشر شيء قبل موافقتك."
             actions={
-              <Button onClick={generate} disabled={generating} size="sm">
+              <Button onClick={() => generate()} disabled={generating} size="sm">
                 <Sparkles size={14} />
-                {generating ? "Generating…" : "Generate 30-day grid"}
+                {generating ? "Generating…" : "Generate 30-day plan · أنشئ خطة"}
               </Button>
             }
           />
+
+          {agentOn === false && (
+            <div role="alert" className="flex items-start gap-3 rounded-xl border border-accent-warm/30 bg-accent-warm/5 p-4">
+              <AlertTriangle size={16} className="mt-0.5 shrink-0 text-accent-warm-deep" aria-hidden />
+              <p className="text-sm text-ink">
+                <span className="font-arabic block" lang="ar">
+                  وكيل التواصل الاجتماعي متوقف: المنشورات المجدولة لن تُنشر حتى تشغّله من «فريقك الذكي» في الصفحة الرئيسية.
+                </span>
+                <span className="block text-ink-soft">
+                  Your social agent is switched off: scheduled posts won&apos;t publish until you switch it on under “Your AI team” on the overview.
+                </span>
+              </p>
+            </div>
+          )}
 
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 sm:gap-4">
             {statCards.map((s) => {
@@ -184,7 +227,7 @@ export default function SocialPage() {
 
           <div className="flex flex-wrap items-center gap-3">
             <div className="dashboard-segment" role="group" aria-label="Filter by status">
-              {(["all", "scheduled", "published", "failed"] as FilterStatus[]).map((f) => (
+              {(Object.keys(FILTER_TEXT) as FilterStatus[]).map((f) => (
                 <button
                   key={f}
                   type="button"
@@ -192,7 +235,9 @@ export default function SocialPage() {
                   data-active={statusFilter === f}
                   className="dashboard-segment-btn"
                 >
-                  {f}
+                  <span className="font-arabic" lang="ar">{FILTER_TEXT[f].ar}</span>
+                  <span className="sr-only"> · </span>
+                  <span className="hidden sm:inline"> · {FILTER_TEXT[f].en}</span>
                 </button>
               ))}
             </div>
@@ -218,16 +263,16 @@ export default function SocialPage() {
           {filtered.length === 0 ? (
             <Card className="p-12 text-center">
               <Empty
-                title={posts.length === 0 ? "Calendar empty" : "No matching posts"}
+                title={posts.length === 0 ? "Calendar empty · التقويم فارغ" : "No matching posts · لا توجد منشورات"}
                 hint={
                   posts.length === 0
-                    ? "Generate a 30-day grid from your brand kit to populate the queue."
-                    : "Try a different status filter."
+                    ? "Generate a 30-day plan from your brand kit, then review and approve each post. · أنشئ خطة ثم راجع كل منشور ووافق عليه."
+                    : "Try a different status filter. · جرّب حالة أخرى."
                 }
                 action={
                   posts.length === 0 ? (
-                    <Button onClick={generate} disabled={generating}>
-                      <Sparkles size={14} /> Generate plan
+                    <Button onClick={() => generate()} disabled={generating}>
+                      <Sparkles size={14} /> Generate plan · أنشئ خطة
                     </Button>
                   ) : undefined
                 }
@@ -242,7 +287,7 @@ export default function SocialPage() {
                     <button
                       type="button"
                       onClick={() => setSelectedId(p.id)}
-                      className="w-full py-4 px-6 flex items-start gap-5 text-left hover:bg-paper-deep/25 transition-colors duration-200"
+                      className="w-full py-4 px-6 flex items-start gap-5 text-start hover:bg-paper-deep/25 transition-colors duration-200"
                     >
                       {/* Date badge */}
                       <div className="w-20 shrink-0 text-center">
@@ -258,7 +303,7 @@ export default function SocialPage() {
                       </div>
                       {/* Content */}
                       <div className="flex-1 min-w-0">
-                        <p className="text-sm md:text-base leading-snug font-medium text-ink">
+                        <p dir="auto" className="text-sm md:text-base leading-snug font-medium text-ink">
                           {p.hook}
                         </p>
                         <div className="mt-2 flex flex-wrap items-center gap-1.5">
@@ -278,9 +323,7 @@ export default function SocialPage() {
                         </div>
                       </div>
                       {/* Status */}
-                      <Badge tone={STAT_TONES[p.status] ?? "default"} className="shrink-0">
-                        {p.status}
-                      </Badge>
+                      <StatusBadge status={p.status} className="shrink-0" />
                     </button>
                   </li>
                 ))}
@@ -296,41 +339,33 @@ export default function SocialPage() {
                   <Card
                     key={key}
                     className={`min-h-[180px] flex flex-col ${
-                      isToday(day)
-                        ? "border-accent/40 ring-1 ring-accent/20 bg-accent/[0.03]"
-                        : ""
+                      isToday(day) ? "border-accent/40 ring-1 ring-accent/20 bg-accent/[0.03]" : ""
                     }`}
                   >
                     <div className="px-3 pt-3 pb-2 border-b border-rule/20">
-                      <div className="text-[10px] font-mono uppercase tracking-wider text-ink-mute">
-                        {format(day, "EEE")}
-                      </div>
+                      <div className="text-[10px] font-mono uppercase tracking-wider text-ink-mute">{format(day, "EEE")}</div>
                       <div className={`text-lg font-semibold nums ${isToday(day) ? "text-accent" : "text-ink"}`}>
                         {format(day, "d")}
                       </div>
                     </div>
                     <div className="flex-1 px-2 py-2 space-y-1.5 overflow-y-auto max-h-48">
                       {dayPosts.length === 0 ? (
-                        <div className="text-[10px] text-ink-mute text-center mt-6 font-mono">
-                          —
-                        </div>
+                        <div className="text-[10px] text-ink-mute text-center mt-6 font-mono">—</div>
                       ) : (
                         dayPosts.map((p) => (
                           <button
                             key={p.id}
                             type="button"
                             onClick={() => setSelectedId(p.id)}
-                            className="block w-full text-left p-2 rounded-lg border border-rule/20 bg-paper-deep/30 hover:border-accent/40 hover:bg-paper transition-all duration-200"
+                            className="block w-full text-start p-2 rounded-lg border border-rule/20 bg-paper-deep/30 hover:border-accent/40 hover:bg-paper transition-all duration-200"
                           >
                             <div className="flex items-center gap-1.5 mb-0.5">
                               <span className="text-[9px] font-mono text-ink-mute">
                                 {format(parseISO(p.scheduled_for), "HH:mm")}
                               </span>
-                              <Badge tone={STAT_TONES[p.status] ?? "default"} className="text-[8px] px-1 py-0">
-                                {p.status}
-                              </Badge>
+                              <StatusBadge status={p.status} className="text-[8px] px-1 py-0" />
                             </div>
-                            <p className="text-xs leading-snug text-ink line-clamp-2">
+                            <p dir="auto" className="text-xs leading-snug text-ink line-clamp-2">
                               {p.hook}
                             </p>
                           </button>
@@ -350,6 +385,7 @@ export default function SocialPage() {
         onClose={() => setSelectedId(null)}
         onUpdated={handleUpdated}
         onDeleted={handleDeleted}
+        onRestored={handleRestored}
       />
     </PageShell>
   );
