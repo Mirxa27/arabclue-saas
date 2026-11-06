@@ -30,6 +30,9 @@ let service = createFakeSupabase("service");
 
 vi.mock("@/lib/observability/error-reporter", () => ({ reportError: vi.fn() }));
 vi.mock("@/lib/agents/store-server", () => ({ updateAgentStatus: vi.fn() }));
+// The Salla connect switches the social agent on only on a first connect (SW-11; covered in
+// __tests__/social/oauth-gates.test.ts) — stubbed here so this file sees only the link writes.
+vi.mock("@/lib/social/gates", () => ({ enableSocialAgentOnFirstConnect: vi.fn(async () => "created") }));
 vi.mock("@/lib/auth/session", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/auth/session")>()),
   getSessionContext: vi.fn(async () => ({ user: auth.user, merchant: auth.merchant }))

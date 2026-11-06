@@ -80,17 +80,20 @@ describe("updateAgentStatus — plan gate (RA-12)", () => {
 });
 
 describe("social OAuth persistence (lib/oauth/flow.ts persistSocialConnection)", () => {
-  it("a Lite merchant's Instagram connect stores the channel but leaves the agent off", async () => {
+  // SW-13: a plan without the social module can no longer connect at all (the start routes
+  // refuse first; the callback re-checks because the plan can change mid-flow).
+  it("a Lite merchant's Instagram connect is refused: no channel, no agent", async () => {
     h.merchant = { plan: "lite", subscription_status: "active" };
-    await persistSocialConnection({
-      merchantId: MERCHANT_ID,
-      platform: "instagram",
-      tokens: { accessToken: "ig-token" },
-      resolveExternalId: async () => "ig-account-1"
-    });
-    const channel = h.service.writes().find((c) => c.table === "social_channels");
-    expect(channel?.payload).toMatchObject({ merchant_id: MERCHANT_ID, platform: "instagram", external_id: "ig-account-1" });
-    expect(agentUpserts().filter((c) => (c.payload as { enabled?: boolean }).enabled === true)).toHaveLength(0);
+    await expect(
+      persistSocialConnection({
+        merchantId: MERCHANT_ID,
+        platform: "instagram",
+        tokens: { accessToken: "ig-token" },
+        resolveExternalId: async () => "ig-account-1"
+      })
+    ).rejects.toMatchObject({ code: "plan_required" });
+    expect(h.service.writes().filter((c) => c.table === "social_channels")).toHaveLength(0);
+    expect(agentUpserts()).toHaveLength(0);
   });
 
   it("a paying Plus merchant's connect switches the social agent on", async () => {

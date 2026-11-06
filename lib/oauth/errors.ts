@@ -16,6 +16,8 @@ export const OAUTH_ERROR_CODES = [
   "merchant_mismatch",
   "employee_not_found",
   "not_configured",
+  "plan_required",
+  "social_disabled",
   "invalid_request",
   "unknown_provider",
   "token_exchange_failed",
@@ -63,6 +65,14 @@ export const OAUTH_ERROR_MESSAGES: Record<OAuthErrorCode, OAuthErrorText> = {
   not_configured: {
     ar: "هذا التكامل غير مُعدّ على المنصّة بعد. اطلب من مسؤول المنصّة إضافة بيانات التطبيق.",
     en: "This integration isn't configured on the platform yet. Ask the platform admin to add its app credentials."
+  },
+  plan_required: {
+    ar: "ربط حسابات التواصل الاجتماعي متاح في الباقات التي تشمل وكيل التواصل الاجتماعي باشتراك فعّال.",
+    en: "Connecting social accounts needs an active subscription on a plan that includes the social agent."
+  },
+  social_disabled: {
+    ar: "ربط حسابات التواصل الاجتماعي موقوف مؤقتًا من مسؤول المنصّة.",
+    en: "Connecting social accounts is temporarily disabled by the platform admin."
   },
   invalid_request: {
     ar: "طلب الربط غير صالح.",

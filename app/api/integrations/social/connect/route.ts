@@ -6,6 +6,7 @@
  * derived from the provider with the token; any `externalId` the client sends is
  * ignored. An account already connected to another store is refused (409). Written
  * on the service role: social_channels is not writable through the Data API.
+ * Gated like the OAuth flows (lib/social/gates.ts): the admin's social-OAuth switch and the plan.
  */
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
@@ -14,10 +15,9 @@ import { getServiceSupabase } from "@/lib/db/supabase";
 import { handleRouteError } from "@/lib/api/route-handler";
 import { upsertSocialChannel } from "@/lib/oauth/channels";
 import { resolveChannelExternalId } from "@/lib/oauth/channel-identity";
-import { getFeatureSettings } from "@/lib/admin/platform-settings";
-import { merchantCanUseFeature, featureGateMessage } from "@/lib/billing/entitlements";
+import { featureGateMessage } from "@/lib/billing/entitlements";
 import { enforceRateLimit } from "@/lib/security/rate-limit";
-import { updateAgentStatus } from "@/lib/agents/store-server";
+import { enableSocialAgentOnFirstConnect, socialConnectBlock } from "@/lib/social/gates";
 import { reportError } from "@/lib/observability/error-reporter";
 
 const ROUTE = "POST /api/integrations/social/connect";
@@ -33,12 +33,12 @@ export async function POST(req: NextRequest) {
   try {
     const merchant = await requireMerchantApi();
 
-    const features = await getFeatureSettings();
-    if (!features.socialOAuth) {
-      return NextResponse.json({ error: "Social OAuth is disabled by platform admin" }, { status: 503 });
+    const blocked = await socialConnectBlock(merchant);
+    if (blocked === "social_disabled") {
+      return NextResponse.json({ error: "Social OAuth is disabled by platform admin", code: blocked }, { status: 503 });
     }
-    if (!merchantCanUseFeature(merchant, "social")) {
-      return NextResponse.json({ error: featureGateMessage("social") }, { status: 402 });
+    if (blocked === "plan_required") {
+      return NextResponse.json({ error: featureGateMessage("social"), code: blocked }, { status: 402 });
     }
 
     const limited = await enforceRateLimit(req, "social:manual-connect", 10, 10 * 60_000, merchant.id);
@@ -53,7 +53,8 @@ export async function POST(req: NextRequest) {
     });
 
     try {
-      await updateAgentStatus(merchant.id, "social", true);
+      // Insert-only: a reconnect never switches a paused agent back on (SW-11).
+      await enableSocialAgentOnFirstConnect(merchant.id);
     } catch (err) {
       reportError(err, { route: ROUTE, merchantId: merchant.id, extra: { step: "enable social agent" } });
     }

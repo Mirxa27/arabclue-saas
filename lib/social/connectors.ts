@@ -1,218 +1,239 @@
 /**
- * Platform connectors.
+ * Platform connectors: one `publish` per platform that resolves only once the provider confirmed
+ * the post, and throws a PublishError (skipped / failed / unknown) otherwise.
  *
- * Each connector implements the same `PlatformConnector` interface so the scheduler can iterate.
- * The Meta connector reuses the Facebook/Instagram Graph API permission scaffolding already
- * built (see /docs/meta-graph-permissions.md for the 18-permission test plan).
+ * Provider references (read 2026-11-06):
+ *  - Instagram (Instagram API with Facebook Login; Graph host + version from lib/meta/graph.ts):
+ *    https://developers.facebook.com/docs/instagram-platform/content-publishing —
+ *    POST /<IG_ID>/media (image_url, caption) → container, POST /<IG_ID>/media_publish
+ *    (creation_id) → media id; "JPEG is the only image format supported"; carousels take
+ *    is_carousel_item children (up to 20; we send at most 10).
+ *  - X: POST https://api.x.com/2/tweets → 201 { data: { id, text } }; 280 weighted characters
+ *    (lib/x/text.ts).
+ *  - LinkedIn: POST https://api.linkedin.com/rest/posts with Linkedin-Version (lib/linkedin/api.ts)
+ *    → "201 response and the response header x-restli-id contains the Post ID" (no body);
+ *    commentary in little text format.
+ *  - TikTok: photo posts (POST /v2/post/publish/content/init/, media_type PHOTO) only accept
+ *    source PULL_FROM_URL from a URL prefix the developer verified with TikTok
+ *    (403 url_ownership_unverified) and unaudited apps may only post privately; videos need a
+ *    video asset. arabclue has neither (catalog images live on the merchant's Salla CDN), so the
+ *    TikTok connector refuses honestly instead of sending a request TikTok rejects or reporting
+ *    an inbox upload as "published".
+ *  - WhatsApp Cloud API: `to` is "the recipient's phone number" (or a group id); there is no
+ *    broadcast recipient, so a feed-style post cannot be "published" to WhatsApp.
  *
- * Production keys: never hard-code. Load from env or per-merchant encrypted credential store.
+ * Tokens are never hard-coded and never come from platform env: connectors are built only from
+ * the merchant's own social_channels (lib/social/publishers.ts).
  */
-import type { Copy, PlatformConnector, VisualBrief, Platform } from "./types";
-import { decryptSecret } from "@/lib/crypto/secrets";
 import { graphUrl } from "@/lib/meta/graph";
+import {
+  LINKEDIN_API_VERSION,
+  LINKEDIN_COMMENTARY_MAX,
+  LINKEDIN_REST_BASE,
+  linkedInRestHeaders,
+  toLittleText
+} from "@/lib/linkedin/api";
+import { X_MAX_WEIGHTED_LENGTH, xWeightedLength } from "@/lib/x/text";
+import { ProviderHttpError, postJson } from "./http";
+import { PublishError, classifyProviderError, skipped } from "./publish-error";
+import type { PlatformConnector, PostMedia } from "./types";
 
-// Minimal fetch helper with retry + Saudi-friendly timeout (2G/3G fringes)
-async function postJSON(url: string, body: unknown, headers: Record<string, string> = {}) {
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "content-type": "application/json", ...headers },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(20_000)
-  });
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`POST ${url} → ${res.status} ${text.slice(0, 200)}`);
+export const X_TWEETS_URL = "https://api.x.com/2/tweets";
+export const INSTAGRAM_CAROUSEL_MAX = 10;
+export const INSTAGRAM_CAPTION_MAX = 2200;
+
+const isHttpsUrl = (value: string) => {
+  try {
+    return new URL(value).protocol === "https:";
+  } catch {
+    return false;
   }
-  return res.json();
+};
+
+function publishableImages(images: readonly PostMedia[]): string[] {
+  return [...new Set(images.map((m) => m.url).filter(isHttpsUrl))];
+}
+
+/** The id field of a JSON object body, or undefined. */
+function idOf(json: unknown, ...path: string[]): string | undefined {
+  let node: unknown = json;
+  for (const key of path) {
+    if (!node || typeof node !== "object") return undefined;
+    node = (node as Record<string, unknown>)[key];
+  }
+  return typeof node === "string" && node ? node : typeof node === "number" ? String(node) : undefined;
 }
 
 // ─── Instagram (Meta Graph API) ───────────────────────────────────────────
-// Requires: instagram_basic, instagram_content_publish, pages_show_list, business_management
-function resolveImageUrl(payload: { productUrl?: string; imageUrl?: string }): string {
-  if (payload.imageUrl) return payload.imageUrl;
-  if (payload.productUrl && /\.(jpg|jpeg|png|webp|gif)(\?|$)/i.test(payload.productUrl)) {
-    return payload.productUrl;
-  }
-  throw new Error("Instagram publish requires a product image URL (imageUrl or product image link)");
-}
+// Requires instagram_basic + instagram_content_publish (+ pages_show_list, business_management).
 
 export function instagramConnector(args: { igUserId: string; accessToken: string }): PlatformConnector {
+  const auth = { authorization: `Bearer ${args.accessToken}` };
+
+  async function createContainer(body: Record<string, unknown>): Promise<string> {
+    try {
+      const res = await postJson("Instagram", graphUrl([args.igUserId, "media"]), body, auth);
+      const id = idOf(res.json, "id");
+      if (!id) throw new PublishError("provider_error", "Instagram created no media container");
+      return id;
+    } catch (err) {
+      throw classifyInstagram(err, false);
+    }
+  }
+
   return {
     platform: "instagram",
-    async publish({ copy, visualBrief, productUrl, imageUrl }) {
-      const isCarousel = visualBrief?.layout === "carousel" && visualBrief.slides.length > 1;
-
-      if (!isCarousel) {
-        const container = await postJSON(graphUrl([args.igUserId, "media"]), {
-          image_url: resolveImageUrl({ productUrl, imageUrl }),
-          caption: copy.caption,
-          access_token: args.accessToken
-        });
-        const pub = await postJSON(graphUrl([args.igUserId, "media_publish"]), {
-          creation_id: container.id,
-          access_token: args.accessToken
-        });
-        return { remoteId: pub.id };
+    async publish({ copy, visualBrief, images }) {
+      const urls = publishableImages(images);
+      if (urls.length === 0) {
+        throw skipped("no_image", "Instagram needs an image from your catalog (JPEG); this post has none.");
+      }
+      const caption = copy.caption.trim();
+      if ([...caption].length > INSTAGRAM_CAPTION_MAX) {
+        throw skipped("caption_too_long", `Instagram captions are limited to ${INSTAGRAM_CAPTION_MAX} characters.`);
       }
 
-      const children: string[] = [];
-      for (const slide of visualBrief!.slides) {
-        const slideImage = slide.imageUrl ?? imageUrl ?? resolveImageUrl({ productUrl, imageUrl });
-        const c = await postJSON(graphUrl([args.igUserId, "media"]), {
-          image_url: slideImage,
-          is_carousel_item: true,
-          access_token: args.accessToken
-        });
-        children.push(c.id);
+      const carousel = visualBrief?.layout === "carousel" && urls.length > 1;
+      let creationId: string;
+      if (!carousel) {
+        creationId = await createContainer({ image_url: urls[0], caption });
+      } else {
+        const children: string[] = [];
+        for (const url of urls.slice(0, INSTAGRAM_CAROUSEL_MAX)) {
+          children.push(await createContainer({ image_url: url, is_carousel_item: true }));
+        }
+        creationId = await createContainer({ media_type: "CAROUSEL", children: children.join(","), caption });
       }
-      const carousel = await postJSON(graphUrl([args.igUserId, "media"]), {
-        media_type: "CAROUSEL",
-        children: children.join(","),
-        caption: copy.caption,
-        access_token: args.accessToken
-      });
-      const pub = await postJSON(graphUrl([args.igUserId, "media_publish"]), {
-        creation_id: carousel.id,
-        access_token: args.accessToken
-      });
-      return { remoteId: pub.id };
+
+      try {
+        const res = await postJson("Instagram", graphUrl([args.igUserId, "media_publish"]), { creation_id: creationId }, auth);
+        const id = idOf(res.json, "id");
+        if (!id) {
+          throw new PublishError("outcome_unknown", "Instagram accepted media_publish without returning a media id", {
+            outcome: "unknown"
+          });
+        }
+        return { remoteId: id };
+      } catch (err) {
+        throw classifyInstagram(err, true);
+      }
     }
   };
 }
 
-// ─── X (Twitter v2) ────────────────────────────────────────────────────────
+/** Graph errors: code 190 = invalid/expired token (reconnect), 4/17/32/613 = rate limits. */
+function classifyInstagram(err: unknown, final: boolean): PublishError {
+  if (err instanceof ProviderHttpError) {
+    const graph = (err.json as { error?: { code?: number; message?: string } } | null)?.error;
+    const message = `Instagram API ${err.status}: ${graph?.message ?? err.body}`.slice(0, 300);
+    if (graph?.code === 190) {
+      return new PublishError("reconnect_required", message, { status: err.status, unauthorized: true, cause: err });
+    }
+    if (graph?.code !== undefined && [4, 17, 32, 613].includes(graph.code)) {
+      return new PublishError("rate_limited", message, { status: err.status, cause: err });
+    }
+    if (err.status < 500) return new PublishError("rejected", message, { status: err.status, cause: err });
+  }
+  return classifyProviderError(err, { final });
+}
+
+// ─── X (API v2) ────────────────────────────────────────────────────────────
+
 export function xConnector(args: { bearer: string }): PlatformConnector {
   return {
     platform: "x",
     async publish({ copy }) {
-      const res = await postJSON(
-        "https://api.x.com/2/tweets",
-        { text: copy.caption.slice(0, 280) },
-        { authorization: `Bearer ${args.bearer}` }
-      );
-      return { remoteId: res.data?.id ?? "unknown" };
+      const text = copy.caption.trim();
+      const weighted = xWeightedLength(text);
+      if (!text) throw skipped("no_copy", "The X caption is empty.");
+      // Captions are checked where they are written (generation + edit); never cut silently here.
+      if (weighted > X_MAX_WEIGHTED_LENGTH) {
+        throw skipped("caption_too_long", `The X caption is ${weighted}/${X_MAX_WEIGHTED_LENGTH} characters. Shorten it and re-queue.`);
+      }
+      try {
+        const res = await postJson("X", X_TWEETS_URL, { text }, { authorization: `Bearer ${args.bearer}` });
+        const id = idOf(res.json, "data", "id");
+        if (!id) throw new PublishError("outcome_unknown", "X accepted the post without returning its id", { outcome: "unknown" });
+        return { remoteId: id };
+      } catch (err) {
+        if (err instanceof ProviderHttpError && err.status === 403 && /duplicate/i.test(err.body)) {
+          throw new PublishError("duplicate", err.message, { status: 403, cause: err });
+        }
+        throw classifyProviderError(err, { final: true });
+      }
     }
   };
 }
 
-// ─── LinkedIn ──────────────────────────────────────────────────────────────
+// ─── LinkedIn (versioned Posts API) ────────────────────────────────────────
+
 export function linkedInConnector(args: { actorUrn: string; accessToken: string }): PlatformConnector {
   return {
     platform: "linkedin",
     async publish({ copy }) {
-      const res = await postJSON(
-        "https://api.linkedin.com/rest/posts",
-        {
-          author: args.actorUrn,
-          commentary: copy.caption,
-          visibility: "PUBLIC",
-          distribution: { feedDistribution: "MAIN_FEED" },
-          lifecycleState: "PUBLISHED"
-        },
-        {
-          authorization: `Bearer ${args.accessToken}`,
-          "LinkedIn-Version": "202410",
-          "X-Restli-Protocol-Version": "2.0.0"
+      const text = copy.caption.trim();
+      if (!text) throw skipped("no_copy", "The LinkedIn caption is empty.");
+      const commentary = toLittleText(text);
+      if (commentary.length > LINKEDIN_COMMENTARY_MAX) {
+        throw skipped("caption_too_long", `LinkedIn posts are limited to ${LINKEDIN_COMMENTARY_MAX} characters.`);
+      }
+      try {
+        const res = await postJson(
+          "LinkedIn",
+          `${LINKEDIN_REST_BASE}/posts`,
+          {
+            author: args.actorUrn,
+            commentary,
+            visibility: "PUBLIC",
+            distribution: { feedDistribution: "MAIN_FEED", targetEntities: [], thirdPartyDistributionChannels: [] },
+            lifecycleState: "PUBLISHED",
+            isReshareDisabledByAuthor: false
+          },
+          linkedInRestHeaders(args.accessToken)
+        );
+        // 201 with an empty body; the post URN is in x-restli-id.
+        const id = res.headers.get("x-restli-id") ?? idOf(res.json, "id");
+        if (!id) {
+          throw new PublishError("outcome_unknown", `LinkedIn answered ${res.status} without a post id`, { outcome: "unknown" });
         }
-      );
-      return { remoteId: res.id ?? "unknown" };
+        return { remoteId: id };
+      } catch (err) {
+        if (err instanceof ProviderHttpError && err.status === 426) {
+          throw new PublishError("rejected", `LinkedIn rejected API version ${LINKEDIN_API_VERSION} as no longer supported`, {
+            status: 426,
+            cause: err
+          });
+        }
+        if (err instanceof ProviderHttpError && err.status === 422 && /duplicate/i.test(err.body)) {
+          throw new PublishError("duplicate", err.message, { status: 422, cause: err });
+        }
+        throw classifyProviderError(err, { final: true });
+      }
     }
   };
 }
 
-// ─── TikTok (Content Posting API) ──────────────────────────────────────────
-// Note: TikTok requires app review and a sandbox-to-prod promotion.
-export function tikTokConnector(args: { accessToken: string }): PlatformConnector {
-  return {
-    platform: "tiktok",
-    async publish({ copy }) {
-      const res = await postJSON(
-        "https://open.tiktokapis.com/v2/post/publish/inbox/video/init/",
-        { post_info: { title: copy.caption.slice(0, 150) } },
-        { authorization: `Bearer ${args.accessToken}` }
-      );
-      return { remoteId: res.data?.publish_id ?? "unknown" };
-    }
-  };
-}
+// ─── Platforms arabclue cannot publish to (honest refusals, nothing is sent) ─
 
-// ─── Snapchat (Marketing API stub — Snapchat doesn't allow native organic posting via API;
-//     use Snap Ads for paid, or Snap Camera Kit for owned experiences) ─────
-export function snapchatConnector(): PlatformConnector {
+export const UNSUPPORTED_PLATFORM_MESSAGES = {
+  tiktok:
+    "TikTok publishing isn't available: TikTok only pulls photos from verified domains and needs a video for video posts. Post this one from the TikTok app.",
+  whatsapp:
+    "WhatsApp has no broadcast feed: the Cloud API sends approved templates to one opted-in customer at a time.",
+  snapchat: "Snapchat does not offer an API for organic posts."
+} as const;
+
+export type UnsupportedPlatform = keyof typeof UNSUPPORTED_PLATFORM_MESSAGES;
+
+function unsupportedConnector(platform: UnsupportedPlatform): PlatformConnector {
   return {
-    platform: "snapchat",
+    platform,
     async publish() {
-      throw new Error(
-        "Snapchat does not expose an organic posting API. " +
-          "Use Snap Ads API for paid, or schedule manual posting via a notification."
-      );
+      throw skipped("unsupported", UNSUPPORTED_PLATFORM_MESSAGES[platform]);
     }
   };
 }
 
-// ─── WhatsApp Business Cloud API ───────────────────────────────────────────
-export function whatsappConnector(args: { phoneNumberId: string; accessToken: string }): PlatformConnector {
-  return {
-    platform: "whatsapp",
-    async publish({ copy }) {
-      // Broadcast pattern using approved templates only — never send marketing as freeform.
-      // Body is delivered via a pre-approved template referenced by name + variables.
-      const res = await postJSON(
-        graphUrl([args.phoneNumberId, "messages"]),
-        {
-          messaging_product: "whatsapp",
-          to: "broadcast",
-          type: "template",
-          template: {
-            name: "arabclue_post_broadcast",
-            language: { code: "ar" },
-            components: [{ type: "body", parameters: [{ type: "text", text: copy.caption }] }]
-          }
-        },
-        { authorization: `Bearer ${args.accessToken}` }
-      );
-      return { remoteId: res.messages?.[0]?.id ?? "unknown" };
-    }
-  };
-}
-
-// ─── Builder ───────────────────────────────────────────────────────────────
-type SocialChannelRow = {
-  platform: string;
-  external_id: string | null;
-  access_token_encrypted: string | null;
-};
-
-/**
- * Per-merchant connectors built ONLY from the merchant's own connected
- * social_channels. There is deliberately no fallback to platform-wide env
- * tokens: the scheduler publishes every merchant's posts, so a fallback would
- * publish a merchant's content on the platform operator's own accounts.
- * A platform the merchant has not connected simply gets no connector.
- */
-export function buildConnectorsForMerchant(channels: SocialChannelRow[]): PlatformConnector[] {
-  const out: PlatformConnector[] = [];
-  const byPlatform = new Map(channels.map((c) => [c.platform, c]));
-
-  const ig = byPlatform.get("instagram");
-  const igToken = decryptSecret(ig?.access_token_encrypted);
-  if (ig?.external_id && igToken) out.push(instagramConnector({ igUserId: ig.external_id, accessToken: igToken }));
-
-  const x = byPlatform.get("x");
-  const xBearer = decryptSecret(x?.access_token_encrypted);
-  if (xBearer) out.push(xConnector({ bearer: xBearer }));
-
-  const li = byPlatform.get("linkedin");
-  const liToken = decryptSecret(li?.access_token_encrypted);
-  if (li?.external_id && liToken) out.push(linkedInConnector({ actorUrn: li.external_id, accessToken: liToken }));
-
-  const tt = byPlatform.get("tiktok");
-  const ttToken = decryptSecret(tt?.access_token_encrypted);
-  if (ttToken) out.push(tikTokConnector({ accessToken: ttToken }));
-
-  const wa = byPlatform.get("whatsapp");
-  const waToken = decryptSecret(wa?.access_token_encrypted);
-  if (wa?.external_id && waToken) out.push(whatsappConnector({ phoneNumberId: wa.external_id, accessToken: waToken }));
-
-  return out;
-}
+export const tikTokConnector = () => unsupportedConnector("tiktok");
+export const whatsappConnector = () => unsupportedConnector("whatsapp");
+export const snapchatConnector = () => unsupportedConnector("snapchat");

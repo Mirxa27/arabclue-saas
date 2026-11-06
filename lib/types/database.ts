@@ -110,7 +110,7 @@ export type Invoice = InvoiceSummary & {
   status_note?: string | null;
 };
 
-export type SocialPostStatus = "scheduled" | "publishing" | "published" | "failed" | "canceled";
+export type SocialPostStatus = "draft" | "scheduled" | "publishing" | "published" | "failed" | "canceled";
 
 export type SocialPostSummary = {
   id: string;

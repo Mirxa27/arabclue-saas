@@ -225,22 +225,43 @@ async function testZatca(): Promise<ConnectionTestResult> {
   }
 }
 
+/**
+ * SW-14: a connection test must never run the production publisher. This calls the scheduler's
+ * read-only probe (same cron auth, a database read, no claims, nothing published) and checks
+ * that the probe refuses a request without the secret. An old deployment without the probe
+ * answers 404 here instead of publishing merchants' posts.
+ */
 async function testCron(): Promise<ConnectionTestResult> {
-  const secret = process.env.CRON_SECRET;
-  const base = process.env.NEXT_PUBLIC_SITE_URL;
+  const secret = process.env.CRON_SECRET?.trim();
+  const base = process.env.NEXT_PUBLIC_SITE_URL?.trim();
   if (!secret) return { ok: false, message: "CRON_SECRET missing" };
   if (!base) return { ok: false, message: "NEXT_PUBLIC_SITE_URL missing" };
+  const url = `${base.replace(/\/$/, "")}/api/cron/social-scheduler/probe`;
   try {
     const { result, latencyMs } = await timed(async () => {
-      const res = await fetch(`${base.replace(/\/$/, "")}/api/cron/social-scheduler`, {
+      const res = await fetch(url, {
         headers: { authorization: `Bearer ${secret}` },
-        signal: AbortSignal.timeout(60_000)
+        signal: AbortSignal.timeout(15_000)
       });
       const text = await res.text();
-      if (!res.ok) throw new Error(`HTTP ${res.status}: ${text.slice(0, 120)}`);
+      if (res.status === 404) throw new Error("Cron probe endpoint not found — deploy the current version");
+      let body: { probe?: unknown; ok?: unknown; error?: unknown } = {};
+      try {
+        body = JSON.parse(text) as typeof body;
+      } catch {
+        /* reported below */
+      }
+      if (body.probe !== true) throw new Error(`HTTP ${res.status}: not a probe response`);
+      if (!res.ok || body.ok !== true) {
+        throw new Error(`HTTP ${res.status}: ${typeof body.error === "string" ? body.error : "probe failed"}`);
+      }
+
+      const anonymous = await fetch(url, { signal: AbortSignal.timeout(15_000) });
+      await anonymous.text().catch(() => "");
+      if (anonymous.status !== 401) throw new Error(`Cron endpoint accepted a request without CRON_SECRET (HTTP ${anonymous.status})`);
       return text;
     });
-    return { ok: true, message: "Social cron endpoint OK", latencyMs, detail: result.slice(0, 200) };
+    return { ok: true, message: "Social cron reachable (probe only — nothing published)", latencyMs, detail: result.slice(0, 200) };
   } catch (err) {
     return { ok: false, message: err instanceof Error ? err.message : "Cron test failed" };
   }

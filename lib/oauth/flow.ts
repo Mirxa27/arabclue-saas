@@ -28,7 +28,7 @@ import {
   setOAuthFlowCookie,
   type OAuthFlow
 } from "@/lib/oauth/flow-cookie";
-import { updateAgentStatus } from "@/lib/agents/store-server";
+import { enableSocialAgentOnFirstConnect, socialConnectBlockById } from "@/lib/social/gates";
 
 type StatePlatform = OAuthStatePayload["platform"];
 
@@ -175,13 +175,21 @@ export async function runOAuthCallback<T>(req: NextRequest, cfg: OAuthCallbackCo
 
 export type ProviderTokens = { accessToken: string; refreshToken?: string; expiresIn?: number };
 
-/** Resolve the provider account id, store the encrypted tokens, enable the social agent. */
+/**
+ * Resolve the provider account id, store the encrypted tokens, and switch the social agent on if
+ * this is the merchant's first connect (never re-enables an agent the merchant paused — SW-11).
+ * The plan and the admin's social-OAuth switch are re-checked here (SW-13): the start route
+ * checked them too, but either can change while the merchant is on the provider's page.
+ */
 export async function persistSocialConnection(args: {
   merchantId: string;
   platform: Platform;
   tokens: ProviderTokens;
   resolveExternalId: () => Promise<string>;
 }): Promise<void> {
+  const blocked = await socialConnectBlockById(args.merchantId);
+  if (blocked) throw new OAuthCallbackError(blocked);
+
   let externalId: string;
   try {
     externalId = await args.resolveExternalId();
@@ -209,7 +217,7 @@ export async function persistSocialConnection(args: {
   }
 
   try {
-    await updateAgentStatus(args.merchantId, "social", true);
+    await enableSocialAgentOnFirstConnect(args.merchantId);
   } catch {
     /* non-critical: the channel is connected either way */
   }

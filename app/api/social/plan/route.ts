@@ -1,122 +1,39 @@
-export const dynamic = "force-dynamic";
-
 import { NextRequest, NextResponse } from "next/server";
-import { z } from "zod";
-import { requireUserApi, getCurrentMerchant } from "@/lib/auth/session";
-import { getServerSupabase } from "@/lib/db/supabase";
-import { runSocialPipeline } from "@/lib/social/agent";
+import { requireMerchantApi } from "@/lib/auth/session";
+import { getServerSupabase, getServiceSupabase } from "@/lib/db/supabase";
 import { handleRouteError } from "@/lib/api/route-handler";
-import { merchantCanUseFeature, featureGateMessage } from "@/lib/billing/entitlements";
-import { getAgentSettings } from "@/lib/admin/platform-settings";
-import type { BrandVoice, Platform, Product } from "@/lib/social/types";
-import type { SallaProduct } from "@/lib/types/database";
+import { handlePlanRequest } from "@/lib/social/plan-service";
 
+export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 export const maxDuration = 300;
 
-const RequestSchema = z.object({
-  horizonDays: z.number().min(7).max(60).default(30),
-  postsPerWeek: z.number().min(1).max(14).default(5),
-  platforms: z.array(z.enum(["instagram", "tiktok", "x", "snapchat", "linkedin", "whatsapp"])).max(6).optional()
-});
-
-function toProduct(p: SallaProduct): Product {
-  return {
-    id: p.salla_product_id,
-    name: p.name,
-    arabicName: p.arabic_name ?? undefined,
-    description: p.description ?? "",
-    price: Number(p.price ?? 0),
-    currency: "SAR",
-    category: p.category ?? "general",
-    imageUrl: p.image_url ?? undefined,
-    url: p.url ?? undefined
-  };
-}
-
+/** Generate a content plan as drafts (lib/social/plan-service.ts). */
 export async function POST(req: NextRequest) {
   try {
-    await requireUserApi();
-    const merchant = await getCurrentMerchant();
-    if (!merchant) return NextResponse.json({ error: "no merchant" }, { status: 400 });
-
-    const agents = await getAgentSettings();
-    if (!agents.social.enabled) {
-      return NextResponse.json({ error: "Social agent is disabled platform-wide" }, { status: 503 });
-    }
-    if (!merchantCanUseFeature(merchant, "social")) {
-      return NextResponse.json({ error: featureGateMessage("social") }, { status: 402 });
-    }
-
-    const body = RequestSchema.parse(await req.json());
-    const supabase = await getServerSupabase();
-
-    const [{ data: kit }, { data: products }] = await Promise.all([
-      supabase.from("brand_kits").select("*").eq("merchant_id", merchant.id).maybeSingle(),
-      supabase.from("salla_products").select("*").eq("merchant_id", merchant.id).limit(100)
-    ]);
-
-    if (!kit) return NextResponse.json({ error: "brand kit not configured" }, { status: 400 });
-
-    const brand: BrandVoice = {
-      name: kit.brand_name,
-      essence: kit.essence ?? "",
-      attributes: kit.attributes ?? [],
-      favorWords: kit.favor_words ?? [],
-      avoidWords: kit.avoid_words ?? [],
-      dialect: kit.dialect ?? "khaliji"
-    };
-
-    const productList: Product[] = ((products ?? []) as SallaProduct[]).map(toProduct);
-    const platforms: Platform[] = body.platforms ?? ["instagram", "tiktok", "x"];
-
-    const fleshed = await runSocialPipeline({
-      brand,
-      products: productList,
-      platforms,
-      horizonDays: body.horizonDays
+    const merchant = await requireMerchantApi();
+    return await handlePlanRequest(req, merchant, {
+      userClient: await getServerSupabase(),
+      serviceClient: getServiceSupabase()
     });
-
-    const { data: plan } = await supabase
-      .from("social_plans")
-      .insert({ merchant_id: merchant.id, horizon_days: body.horizonDays, raw_plan: fleshed.map((f) => f.post) })
-      .select()
-      .single();
-
-    await supabase.from("social_posts").insert(
-      fleshed.map((f) => ({
-        merchant_id: merchant.id,
-        plan_id: plan?.id,
-        scheduled_for: f.post.scheduledFor,
-        platforms: f.post.platforms,
-        goal: f.post.goal,
-        hook: f.post.hook,
-        copies: f.copies,
-        visual_brief: f.visualBrief,
-        status: "scheduled"
-      }))
-    );
-
-    return NextResponse.json({ ok: true, count: fleshed.length, planId: plan?.id });
   } catch (err) {
-    return handleRouteError(err);
+    return handleRouteError(err, { route: "POST /api/social/plan" });
   }
 }
 
 export async function GET() {
   try {
-    await requireUserApi();
-    const merchant = await getCurrentMerchant();
-    if (!merchant) return NextResponse.json({ posts: [] });
+    const merchant = await requireMerchantApi();
     const supabase = await getServerSupabase();
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from("social_posts")
       .select("*")
       .eq("merchant_id", merchant.id)
       .order("scheduled_for", { ascending: true })
       .limit(60);
+    if (error) throw new Error(`social_posts lookup failed: ${error.message}`);
     return NextResponse.json({ posts: data ?? [] });
   } catch (err) {
-    return handleRouteError(err);
+    return handleRouteError(err, { route: "GET /api/social/plan" });
   }
 }

@@ -1,16 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
-import { z } from "zod";
 import { requireMerchantApi } from "@/lib/auth/session";
-import { getServerSupabase } from "@/lib/db/supabase";
+import { getServerSupabase, getServiceSupabase } from "@/lib/db/supabase";
 import { handleRouteError } from "@/lib/api/route-handler";
-import { notFound } from "@/lib/api/errors";
+import { HttpError, notFound } from "@/lib/api/errors";
+import { assertNoDbError } from "@/lib/db/errors";
+import { reportError } from "@/lib/observability/error-reporter";
+import { merchantCanUseFeature } from "@/lib/billing/entitlements";
+import { PostPatchSchema, decidePostPatch, type StoredPost } from "@/lib/social/post-edit";
+import { enableSocialAgentOnFirstConnect, loadSocialAgentState, socialAgentActive } from "@/lib/social/gates";
 
-const PatchSchema = z.object({
-  scheduledFor: z.iso.datetime({ offset: true }).optional(),
-  status: z.enum(["scheduled", "canceled"]).optional(),
-  copies: z.record(z.string(), z.unknown()).optional(),
-  hook: z.string().max(500).optional()
-});
+const PATCH_COLUMNS = "id, status, scheduled_for, platforms, copies, media, publish_results";
 
 export async function GET(_req: NextRequest, props: { params: Promise<{ id: string }> }) {
   try {
@@ -32,45 +31,85 @@ export async function GET(_req: NextRequest, props: { params: Promise<{ id: stri
 }
 
 export async function PATCH(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const route = "PATCH /api/social/post/:id";
   try {
     const { id } = await props.params;
     const merchant = await requireMerchantApi();
-    const body = PatchSchema.parse(await req.json());
+    const patch = PostPatchSchema.parse(await req.json());
     const supabase = await getServerSupabase();
-    const { data, error } = await supabase
+
+    const { data: current, error: readErr } = await supabase
       .from("social_posts")
-      .update({
-        scheduled_for: body.scheduledFor,
-        status: body.status,
-        copies: body.copies,
-        hook: body.hook
-      })
+      .select(PATCH_COLUMNS)
       .eq("id", id)
       .eq("merchant_id", merchant.id)
-      .select("id");
-    if (error) return NextResponse.json({ error: error.message }, { status: 400 });
-    if (!data?.length) throw notFound("Post");
-    return NextResponse.json({ ok: true });
+      .maybeSingle();
+    assertNoDbError(readErr, "Load post", { route, merchantId: merchant.id });
+    if (!current) throw notFound("Post");
+
+    const decision = decidePostPatch(current as StoredPost, patch, {
+      now: new Date(),
+      entitled: merchantCanUseFeature(merchant, "social")
+    });
+
+    const { data, error } = await supabase
+      .from("social_posts")
+      .update(decision.update)
+      .eq("id", id)
+      .eq("merchant_id", merchant.id)
+      .eq("status", decision.expectedStatus)
+      .select("id, status");
+    assertNoDbError(error, "Update post", { route, merchantId: merchant.id });
+    if (!data?.length) {
+      throw new HttpError(409, "This post changed while you were editing it. Reload and try again.", "post_changed");
+    }
+
+    // Approving / re-queueing is the merchant's intent to publish: a first-time user gets the social
+    // agent switched on (insert-only — an agent they paused stays paused, and the UI says so).
+    let agentActive: boolean | undefined;
+    if (decision.nextStatus === "scheduled") {
+      const service = getServiceSupabase();
+      try {
+        await enableSocialAgentOnFirstConnect(merchant.id, service);
+        agentActive = socialAgentActive(await loadSocialAgentState(service, merchant.id));
+      } catch (err) {
+        reportError(err, { route, merchantId: merchant.id, extra: { step: "social agent state" } });
+      }
+    }
+
+    return NextResponse.json({ ok: true, status: decision.nextStatus, ...(agentActive === undefined ? {} : { agentActive }) });
   } catch (err) {
-    return handleRouteError(err, { route: "PATCH /api/social/post/:id" });
+    return handleRouteError(err, { route });
   }
 }
 
 export async function DELETE(_req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const route = "DELETE /api/social/post/:id";
   try {
     const { id } = await props.params;
     const merchant = await requireMerchantApi();
     const supabase = await getServerSupabase();
+    // A post being published right now is not deleted out from under the publishing run.
     const { data, error } = await supabase
       .from("social_posts")
       .delete()
       .eq("id", id)
       .eq("merchant_id", merchant.id)
+      .neq("status", "publishing")
       .select("id");
-    if (error) return NextResponse.json({ error: error.message }, { status: 400 });
-    if (!data?.length) throw notFound("Post");
+    assertNoDbError(error, "Delete post", { route, merchantId: merchant.id });
+    if (!data?.length) {
+      const { data: exists } = await supabase
+        .from("social_posts")
+        .select("id")
+        .eq("id", id)
+        .eq("merchant_id", merchant.id)
+        .maybeSingle();
+      if (exists) throw new HttpError(409, "This post is being published right now", "post_publishing");
+      throw notFound("Post");
+    }
     return NextResponse.json({ ok: true });
   } catch (err) {
-    return handleRouteError(err, { route: "DELETE /api/social/post/:id" });
+    return handleRouteError(err, { route });
   }
 }
