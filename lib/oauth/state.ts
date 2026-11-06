@@ -5,6 +5,10 @@ export type OAuthStatePayload = {
   merchantId: string;
   platform: Platform | "salla";
   exp: number;
+  /**
+   * Per-flow random value. Start routes also put it in the httpOnly flow cookie
+   * (lib/oauth/flow-cookie.ts) and callbacks require the two to match.
+   */
   nonce: string;
   /** PKCE code challenge (X, TikTok) */
   codeChallenge?: string;
@@ -20,26 +24,31 @@ function sign(payloadB64: string): string {
   return createHmac("sha256", stateSecret()).update(payloadB64).digest("base64url");
 }
 
-export function createOAuthState(payload: Omit<OAuthStatePayload, "exp" | "nonce"> & { ttlSec?: number }): string {
+export function createOAuthState(
+  payload: Omit<OAuthStatePayload, "exp" | "nonce"> & { ttlSec?: number; nonce?: string }
+): string {
+  const { ttlSec, nonce, ...rest } = payload;
   const full: OAuthStatePayload = {
-    ...payload,
-    nonce: randomBytes(12).toString("hex"),
-    exp: Date.now() + (payload.ttlSec ?? 600) * 1000
+    ...rest,
+    nonce: nonce ?? randomBytes(12).toString("hex"),
+    exp: Date.now() + (ttlSec ?? 600) * 1000
   };
   const body = Buffer.from(JSON.stringify(full)).toString("base64url");
   return `${body}.${sign(body)}`;
 }
 
 export function verifyOAuthState(state: string): OAuthStatePayload {
-  const [body, sig] = state.split(".");
-  if (!body || !sig) throw new Error("Invalid OAuth state");
+  const [body, sig, extra] = state.split(".");
+  if (!body || !sig || extra !== undefined) throw new Error("Invalid OAuth state");
   const expected = sign(body);
   const a = Buffer.from(sig);
   const b = Buffer.from(expected);
   if (a.length !== b.length || !timingSafeEqual(a, b)) throw new Error("OAuth state signature mismatch");
 
   const payload = JSON.parse(Buffer.from(body, "base64url").toString("utf8")) as OAuthStatePayload;
-  if (payload.exp < Date.now()) throw new Error("OAuth state expired");
-  if (!payload.merchantId || !payload.platform) throw new Error("OAuth state missing fields");
+  if (typeof payload.exp !== "number" || payload.exp < Date.now()) throw new Error("OAuth state expired");
+  if (!payload.merchantId || !payload.platform || typeof payload.nonce !== "string" || !payload.nonce) {
+    throw new Error("OAuth state missing fields");
+  }
   return payload;
 }

@@ -4,15 +4,14 @@ import { Suspense, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Field, Input } from "@/components/ui/primitives";
+import { AuthMessage } from "@/components/auth/auth-message";
+import { safeRedirectPath } from "@/lib/auth/redirect";
+import { loginErrorMessage, type LoginErrorCode } from "@/lib/auth/login-errors";
 import Link from "next/link";
 
 function SignupForm() {
   const searchParams = useSearchParams();
-  const nextPath = useMemo(() => {
-    const next = searchParams.get("next");
-    if (!next || !next.startsWith("/") || next.startsWith("//")) return null;
-    return next;
-  }, [searchParams]);
+  const nextPath = useMemo(() => safeRedirectPath(searchParams.get("next")), [searchParams]);
   const loginHref = nextPath ? `/login?next=${encodeURIComponent(nextPath)}` : "/login";
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
@@ -23,17 +22,22 @@ function SignupForm() {
     e.preventDefault();
     setState("sending");
     setError(null);
-    const res = await fetch("/api/auth/otp", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ email, mode: "signup", name })
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      setError(data.error ?? "Could not send verification link");
+    try {
+      const res = await fetch("/api/auth/otp", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email, mode: "signup", name, ...(nextPath ? { next: nextPath } : {}) }),
+      });
+      const data = (await res.json().catch(() => ({}))) as { code?: LoginErrorCode };
+      if (!res.ok) {
+        setError(data.code ?? (res.status === 429 ? "rate_limited" : "unknown"));
+        setState("error");
+      } else {
+        setState("sent");
+      }
+    } catch {
+      setError("auth_unavailable");
       setState("error");
-    } else {
-      setState("sent");
     }
   }
 
@@ -45,18 +49,45 @@ function SignupForm() {
 
       <form onSubmit={onSubmit} className="mt-10 space-y-5">
         <Field label="Your name">
-          <Input required placeholder="Abdullah Mirza" value={name} onChange={(e) => setName(e.target.value)} disabled={state === "sending"} />
+          <Input
+            name="name"
+            autoComplete="name"
+            required
+            maxLength={120}
+            placeholder="Abdullah Mirza"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            disabled={state === "sending"}
+          />
         </Field>
         <Field label="Work email">
-          <Input type="email" required placeholder="you@yourstore.sa" value={email} onChange={(e) => setEmail(e.target.value)} disabled={state === "sending"} />
+          <Input
+            type="email"
+            name="email"
+            autoComplete="email"
+            required
+            maxLength={254}
+            placeholder="you@yourstore.sa"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            disabled={state === "sending"}
+          />
         </Field>
 
         <Button type="submit" disabled={state === "sending" || state === "sent"} className="w-full">
           {state === "sending" ? "Sending…" : state === "sent" ? "Check your inbox" : "Create account"}
         </Button>
 
-        {error && <p className="text-sm text-accent-warm-deep">{error}</p>}
-        {state === "sent" && <p className="text-sm text-accent-deep">Verification link sent to {email}.</p>}
+        {error && <AuthMessage tone="error" text={loginErrorMessage(error)} />}
+        {state === "sent" && (
+          <AuthMessage
+            tone="success"
+            text={{
+              ar: "أرسلنا رابط التأكيد إلى بريدك. افتحه لإكمال إنشاء حسابك.",
+              en: "We sent a verification link to your inbox. Open it to finish creating your account.",
+            }}
+          />
+        )}
       </form>
 
       <div className="rule my-10" />

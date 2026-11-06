@@ -1,46 +1,34 @@
+import type { NextRequest } from "next/server";
+import { exchangeLinkedInCode, resolveLinkedInActorUrn } from "@/lib/linkedin/oauth";
+import { envConfigured, persistSocialConnection, runOAuthCallback } from "@/lib/oauth/flow";
+import { handleRouteError } from "@/lib/api/route-handler";
+
 export const dynamic = "force-dynamic";
 
-import { NextRequest, NextResponse } from "next/server";
-import { getServiceSupabase } from "@/lib/db/supabase";
-import { verifyOAuthState } from "@/lib/oauth/state";
-import { upsertSocialChannel } from "@/lib/oauth/channels";
-import { exchangeLinkedInCode, resolveLinkedInActorUrn } from "@/lib/linkedin/oauth";
-import { updateAgentStatus } from "@/lib/agents/store-server";
+const ROUTE = "GET /api/oauth/linkedin/callback";
 
 export async function GET(req: NextRequest) {
-  const url = new URL(req.url);
-  const code = url.searchParams.get("code");
-  const stateRaw = url.searchParams.get("state");
-
-  if (!code || !stateRaw) {
-    return NextResponse.redirect(new URL("/integrations/callback?platform=linkedin&status=error&error=missing_params", req.url));
-  }
-
   try {
-    const state = verifyOAuthState(stateRaw);
-    if (state.platform !== "linkedin") throw new Error("Invalid OAuth state platform");
-
-    const tokens = await exchangeLinkedInCode(code);
-    const actorUrn = await resolveLinkedInActorUrn(tokens.access_token);
-    const supabase = getServiceSupabase();
-
-    await upsertSocialChannel(supabase, state.merchantId, "linkedin", {
-      externalId: actorUrn,
-      accessToken: tokens.access_token,
-      refreshToken: tokens.refresh_token,
-      tokenExpiresAt: tokens.expires_in
-        ? new Date(Date.now() + tokens.expires_in * 1000).toISOString()
-        : undefined
+    return await runOAuthCallback(req, {
+      flow: "linkedin",
+      route: ROUTE,
+      statePlatforms: ["linkedin"],
+      fallbackPlatform: "linkedin",
+      isConfigured: () => envConfigured("LINKEDIN_CLIENT_ID", "LINKEDIN_CLIENT_SECRET"),
+      exchange: ({ code }) => exchangeLinkedInCode(code),
+      persist: ({ tokens, merchantId }) =>
+        persistSocialConnection({
+          merchantId,
+          platform: "linkedin",
+          tokens: {
+            accessToken: tokens.access_token,
+            refreshToken: tokens.refresh_token,
+            expiresIn: tokens.expires_in
+          },
+          resolveExternalId: () => resolveLinkedInActorUrn(tokens.access_token)
+        })
     });
-
-    try {
-      await updateAgentStatus(state.merchantId, "social", true);
-    } catch { /* non-critical */ }
-
-    return NextResponse.redirect(new URL("/integrations/callback?platform=linkedin&status=success", req.url));
   } catch (err) {
-    console.error("LinkedIn OAuth callback failed", err);
-    const cause = err instanceof Error ? err.message : "unknown_error";
-    return NextResponse.redirect(new URL(`/integrations/callback?platform=linkedin&status=error&error=${encodeURIComponent(cause)}`, req.url));
+    return handleRouteError(err, { route: ROUTE });
   }
 }

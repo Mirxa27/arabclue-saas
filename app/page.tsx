@@ -1,4 +1,5 @@
 import { HomeLanding } from "@/components/marketing/home-landing";
+import { ImplicitSessionRescue } from "@/components/auth/implicit-session-rescue";
 
 type PageProps = {
   searchParams?: Promise<{
@@ -8,5 +9,11 @@ type PageProps = {
 
 export default async function Page(props: PageProps) {
   const searchParams = await props.searchParams;
-  return <HomeLanding initialLang={searchParams?.lang === "ar" ? "ar" : "en"} />;
+  return (
+    <>
+      {/* Old implicit-flow magic links fall back to the Site URL (/#access_token=…). */}
+      <ImplicitSessionRescue />
+      <HomeLanding initialLang={searchParams?.lang === "ar" ? "ar" : "en"} />
+    </>
+  );
 }
