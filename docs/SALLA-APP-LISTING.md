@@ -143,7 +143,7 @@ In the submission form, provide:
 
 - Privacy policy: `https://arabclue.com/legal/privacy`
 - Terms of service: `https://arabclue.com/legal/terms`
-- PDPL data processing addendum: `https://arabclue.com/legal/pdpl`
+- PDPL data processing addendum (DPA): `https://arabclue.com/legal/dpa`
 - Refund policy: `https://arabclue.com/legal/refunds`
 
 ---
@@ -153,7 +153,7 @@ In the submission form, provide:
 - [ ] All five screenshots produced and named `screen-01.png` … `screen-05.png` _(media — needs a deployed instance to capture)_
 - [ ] Cover image at `marketing/salla-cover.png` _(design asset)_
 - [x] Privacy, terms, PDPL, refund pages exist in code (`app/legal/{privacy,terms,refunds}`) — _confirm "indexed" after deploy_
-- [~] Demo merchant account ready — seed implemented: `npm run db:seed` (needs live `SUPABASE_SERVICE_ROLE_KEY`)
+- [~] Demo merchant account ready — run `npm run db:seed` against production at submission time (needs `NEXT_PUBLIC_SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY`). It creates or updates `DEMO_MERCHANT_EMAIL` (default `demo@arabclue.com`) as an owned Pro merchant with a brand kit and a subscription valid for `DEMO_MERCHANT_DAYS` (default 30) — re-run before each review. The password is `DEMO_MERCHANT_PASSWORD` (≥ 12 characters) when set; otherwise a random one is generated for a new user and printed **once**. Give it to the Salla reviewers through the portal only, never in the repo.
 - [ ] Loom walkthrough video uploaded _(media)_
 - [x] Support email auto-responder configured — implemented in `app/api/support` via `lib/support/notify.ts`; set `RESEND_API_KEY` + `SUPPORT_FROM_EMAIL` in prod
 - [x] Pricing tiers match in code (99 / 299 / 599 SAR, guarded by `__tests__/billing/plans.test.ts`) — _enter the same in the Salla portal_
