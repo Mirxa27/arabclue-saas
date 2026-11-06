@@ -1,51 +1,16 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { z } from "zod";
-import { requireMerchantApi } from "@/lib/auth/session";
 import { getServerSupabase, getServiceSupabase } from "@/lib/db/supabase";
-import { handleRouteError } from "@/lib/api/route-handler";
-import { notFound } from "@/lib/api/errors";
 import { redactIntegrationRow } from "@/lib/employees/credentials";
-import type { AIEmployeeRow } from "@/lib/employees/types";
+import { employeeRouteError } from "@/lib/employees/http";
+import { applyEmployeeUpdate, EmployeeUpdateSchema } from "@/lib/employees/manage";
+import { requireOwnedEmployee } from "@/lib/employees/route-helpers";
 
 export const dynamic = "force-dynamic";
-
-const UpdateSchema = z.object({
-  display_name: z.string().min(2).max(64).optional(),
-  avatar: z.string().max(64).optional().nullable(),
-  language: z.enum(["ar", "en", "ar-en", "khaliji", "msa"]).optional(),
-  tone: z.enum(["professional", "friendly", "formal", "playful"]).optional(),
-  timezone: z.string().optional(),
-  working_hours: z
-    .object({
-      mode: z.enum(["always", "business_hours", "custom"]),
-      start: z.string().regex(/^\d{2}:\d{2}$/),
-      end: z.string().regex(/^\d{2}:\d{2}$/),
-      days: z.array(z.number().int().min(0).max(6)).max(7)
-    })
-    .optional(),
-  knowledge: z.string().max(8000).optional().nullable(),
-  goals: z.array(z.string().min(1).max(200)).max(8).optional(),
-  status: z.enum(["active", "paused", "offboarded"]).optional(),
-  config: z.record(z.string(), z.unknown()).optional()
-});
-
-async function fetchEmployeeOwned(id: string): Promise<AIEmployeeRow> {
-  const merchant = await requireMerchantApi();
-  const sb = await getServerSupabase();
-  const { data, error } = await sb
-    .from("ai_employees")
-    .select("*")
-    .eq("id", id)
-    .eq("merchant_id", merchant.id)
-    .single();
-  if (error || !data) throw notFound("Employee");
-  return data as AIEmployeeRow;
-}
 
 // ── GET /api/employees/:id ───────────────────────────────────────────────
 export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string }> }): Promise<NextResponse> {
   try {
-    const employee = await fetchEmployeeOwned((await ctx.params).id);
+    const { employee } = await requireOwnedEmployee((await ctx.params).id);
     const sb = await getServerSupabase();
     const [integrations, tasks, conversations, heartbeat, actions] = await Promise.all([
       sb.from("ai_employee_integrations").select("*").eq("employee_id", employee.id),
@@ -81,49 +46,36 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
       actions: actions.data ?? []
     });
   } catch (err) {
-    return handleRouteError(err, { route: "GET /api/employees/:id" });
+    return employeeRouteError(err, "GET /api/employees/:id");
   }
 }
 
 // ── PATCH /api/employees/:id ─────────────────────────────────────────────
+// status 'active' → 402 plan_required | seat_unpaid | seat_limit (F10).
 export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: string }> }): Promise<NextResponse> {
   try {
-    const employee = await fetchEmployeeOwned((await ctx.params).id);
-    const updates = UpdateSchema.parse(await req.json());
-
-    const patch: Record<string, unknown> = { ...updates };
-    if (updates.status === "paused") patch.paused_at = new Date().toISOString();
-    if (updates.status === "active") patch.paused_at = null;
-
-    // status / paused_at are service-role columns; ownership was checked above.
-    const { data, error } = await getServiceSupabase()
-      .from("ai_employees")
-      .update(patch)
-      .eq("id", employee.id)
-      .eq("merchant_id", employee.merchant_id)
-      .select("*")
-      .single();
-    if (error || !data) throw new Error(error?.message ?? "Failed to update employee");
-
-    return NextResponse.json({ employee: data });
+    const { merchant, employee } = await requireOwnedEmployee((await ctx.params).id);
+    const updates = EmployeeUpdateSchema.parse(await req.json());
+    const updated = await applyEmployeeUpdate(merchant, employee, updates);
+    return NextResponse.json({ employee: updated });
   } catch (err) {
-    return handleRouteError(err, { route: "PATCH /api/employees/:id" });
+    return employeeRouteError(err, "PATCH /api/employees/:id");
   }
 }
 
 // ── DELETE /api/employees/:id (off-boarding) ─────────────────────────────
 export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ id: string }> }): Promise<NextResponse> {
   try {
-    const employee = await fetchEmployeeOwned((await ctx.params).id);
+    const { merchant, employee } = await requireOwnedEmployee((await ctx.params).id);
     // status / offboarded_at are service-role columns; ownership was checked above.
     const { error } = await getServiceSupabase()
       .from("ai_employees")
       .update({ status: "offboarded", offboarded_at: new Date().toISOString() })
       .eq("id", employee.id)
-      .eq("merchant_id", employee.merchant_id);
+      .eq("merchant_id", merchant.id);
     if (error) throw new Error(error.message);
     return NextResponse.json({ ok: true });
   } catch (err) {
-    return handleRouteError(err, { route: "DELETE /api/employees/:id" });
+    return employeeRouteError(err, "DELETE /api/employees/:id");
   }
 }

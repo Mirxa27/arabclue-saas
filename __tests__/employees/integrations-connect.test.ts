@@ -16,13 +16,19 @@ const h = vi.hoisted(() => ({
 
 vi.mock("@/lib/auth/session", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/auth/session")>();
-  return { ...actual, requireMerchantApi: vi.fn(async () => ({ id: "merchant-1" })) };
+  // dpa_version "2026-11" (CURRENT_DPA_VERSION): customer-facing channels need the current DPA.
+  return { ...actual, requireMerchantApi: vi.fn(async () => ({ id: "merchant-1", dpa_version: "2026-11" })) };
 });
 vi.mock("@/lib/db/supabase", () => ({
   getServerSupabase: async () => h.user.client,
   getServiceSupabase: () => {
     throw new Error("connect writes go through the merchant's RLS-scoped session");
   }
+}));
+// The route's per-merchant connect limit is not what these tests exercise.
+vi.mock("@/lib/security/rate-limit", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/security/rate-limit")>()),
+  enforceRateLimit: vi.fn(async () => ({ success: true, limit: 20, remaining: 19, resetAt: 0 }))
 }));
 vi.mock("@/lib/observability/error-reporter", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/observability/error-reporter")>();
@@ -300,11 +306,18 @@ describe("telegram connect (F29)", () => {
 });
 
 describe("other kinds keep their behaviour", () => {
-  it("stores free-form credentials and the client's external_id", async () => {
-    const res = await connect({ kind: "email", external_id: "ops@store.sa", credentials: { smtp_host: "smtp.x", smtp_pass: "p" } });
+  it("stores free-form credentials and the client's external_id for non-messaging kinds", async () => {
+    const res = await connect({ kind: "hubspot", external_id: "portal-1", credentials: { api_key: "pat-na1-xyz", portal: "1" } });
     expect(res.status).toBe(200);
-    expect((upsert()?.payload as { external_id: string }).external_id).toBe("ops@store.sa");
-    expect(storedCreds()).toEqual({ smtp_host: "smtp.x", smtp_pass: "p" });
+    expect((upsert()?.payload as { external_id: string }).external_id).toBe("portal-1");
+    expect(storedCreds()).toEqual({ api_key: "pat-na1-xyz", portal: "1" });
+  });
+
+  it("SW-6: the email channel refuses SMTP-only credentials (no platform fallback) — nothing saved", async () => {
+    const res = await connect({ kind: "email", external_id: "ops@store.sa", credentials: { smtp_host: "smtp.x", smtp_pass: "p" } });
+    expect(res.status).toBe(400);
+    expect((await res.json()).code).toBe("email_sender_required");
+    expect(upsert()).toBeUndefined();
   });
 
   it("bounds the credentials record (keys counted before parsing)", async () => {

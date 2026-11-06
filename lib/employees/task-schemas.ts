@@ -7,11 +7,16 @@ import { z } from "zod";
  */
 export const IsoDateTimeSchema = z.union([z.iso.datetime(), z.iso.datetime({ precision: -1 })]);
 
+/**
+ * `assignee`: "agent" — the 24/7 tick tries to complete it with one concrete action (and hands
+ * it back to you when it cannot); "human" — a to-do for the merchant that the tick never touches.
+ */
 export const TaskCreateSchema = z.object({
   title: z.string().min(2).max(200),
   description: z.string().max(2000).optional().nullable(),
   priority: z.enum(["low", "normal", "high", "urgent"]).default("normal"),
-  due_at: IsoDateTimeSchema.optional().nullable()
+  due_at: IsoDateTimeSchema.optional().nullable(),
+  assignee: z.enum(["agent", "human"]).default("agent")
 });
 
 export const TaskUpdateSchema = z.object({
@@ -19,5 +24,6 @@ export const TaskUpdateSchema = z.object({
   status: z.enum(["todo", "in_progress", "blocked", "done", "canceled"]).optional(),
   priority: z.enum(["low", "normal", "high", "urgent"]).optional(),
   title: z.string().min(2).max(200).optional(),
-  description: z.string().max(2000).optional().nullable()
+  description: z.string().max(2000).optional().nullable(),
+  assignee: z.enum(["agent", "human"]).optional()
 });

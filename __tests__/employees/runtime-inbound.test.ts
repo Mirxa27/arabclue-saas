@@ -16,7 +16,10 @@ vi.mock("@/lib/employees/tools", () => ({
   decideTool: vi.fn(async () => ({ use_tool: false, tool: "none" })),
   executeTool: vi.fn()
 }));
-vi.mock("@/lib/employees/channels/dispatch", () => ({ dispatchChannelSend: vi.fn(async () => ({ remoteId: "mid.out" })) }));
+vi.mock("@/lib/employees/channels/dispatch", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/employees/channels/dispatch")>()),
+  dispatchChannelSend: vi.fn(async () => ({ remoteId: "mid.out" }))
+}));
 vi.mock("@/lib/employees/integration-store", () => ({ markIntegrationError: vi.fn(async () => true) }));
 
 import { handleInboundMessage, HUMAN_TAKEOVER_STATUSES, upsertConversation } from "@/lib/employees/runtime";
@@ -46,12 +49,21 @@ const employee = {
   knowledge: null,
   goals: [],
   status: "active",
+  billing_status: "trial",
+  trial_ends_at: new Date(Date.now() + 7 * 86400_000).toISOString(),
+  next_billing_at: null,
   config: {}
 };
+const merchantRow = { id: "m1", plan: "plus", subscription_status: "active", dpa_version: "2026-11" };
 
 function useDb(opts: { conv?: ReturnType<typeof conversation> | null; insertConv?: FakeResult; raced?: ReturnType<typeof conversation> } = {}) {
   let convSelects = 0;
   h.sb = createFakeSupabase("service", (call: FakeCall) => {
+    const byId = call.filters.some(([op, col]) => op === "eq" && col === "id");
+    if (call.table === "ai_employee_conversations" && call.op === "select" && call.single === "maybeSingle" && byId) {
+      // respond() loads the conversation by (id, employee_id) — F15
+      return { data: opts.conv ?? conversation("open") };
+    }
     if (call.table === "ai_employee_conversations" && call.op === "select" && call.single === "maybeSingle") {
       convSelects += 1;
       return { data: convSelects === 1 ? opts.conv ?? null : opts.raced ?? null };
@@ -61,6 +73,7 @@ function useDb(opts: { conv?: ReturnType<typeof conversation> | null; insertConv
     }
     if (call.table === "ai_employee_conversations" && call.op === "select") return { data: conversation("open") };
     if (call.table === "ai_employees") return { data: employee };
+    if (call.table === "merchants") return { data: merchantRow };
     if (call.table === "ai_employee_integrations") {
       return { data: [{ id: "int-meta", kind: "meta", status: "connected", credentials: { page_id: "1", page_access_token: "t" }, config: {} }] };
     }

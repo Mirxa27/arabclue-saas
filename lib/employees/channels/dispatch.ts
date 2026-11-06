@@ -4,12 +4,17 @@
  * Both the runtime (`sendOnChannel`) and the tool layer (`send_message`) route
  * through `dispatchChannelSend` so the channel matrix lives in exactly one place.
  * Adding a channel means adding one `case` here — nothing else needs to change.
+ *
+ * Credentials are the adapter's own shape (lib/employees/channel-credentials.ts maps
+ * OAuth-stored rows onto it). Nothing here falls back to a platform account or sender:
+ * a channel without the merchant's own credentials fails visibly (SW-6).
  */
 import type { IntegrationKind } from "../types";
 import { sendWhatsAppText, type WhatsAppCredentials } from "./whatsapp";
 import { sendTelegramText, type TelegramCredentials } from "./telegram";
 import { sendSlackMessage, type SlackCredentials } from "./slack";
-import { sendEmail, type EmailCredentials } from "./email";
+import { sendEmail } from "./email";
+import { sendGmailMessage, type RefreshedGoogleToken } from "./gmail";
 import { sendSms, type TwilioSmsCredentials } from "./sms";
 import { sendWebhookMessage, type WebhookCredentials } from "./webhook";
 import { sendMetaDirectMessage, type MetaMessagingCredentials } from "./meta";
@@ -52,13 +57,21 @@ export class UnsupportedChannelError extends Error {
 
 export type ChannelSendOutcome = { remoteId: string };
 
-export async function dispatchChannelSend(args: {
-  kind: IntegrationKind;
-  credentials: Record<string, unknown>;
-  to: string;
-  body: string;
-  subject?: string;
-}): Promise<ChannelSendOutcome> {
+export type DispatchHooks = {
+  /** A provider token was refreshed during the send (Gmail): persist the new credential fields. */
+  onCredentialsRefreshed?: (patch: Record<string, unknown>) => Promise<void>;
+};
+
+export async function dispatchChannelSend(
+  args: {
+    kind: IntegrationKind;
+    credentials: Record<string, unknown>;
+    to: string;
+    body: string;
+    subject?: string;
+  },
+  hooks: DispatchHooks = {}
+): Promise<ChannelSendOutcome> {
   const { kind, credentials, to, body, subject } = args;
   switch (kind) {
     case "whatsapp": {
@@ -71,16 +84,27 @@ export async function dispatchChannelSend(args: {
     }
     case "slack": {
       const creds = credentials as unknown as SlackCredentials;
-      const channel = to || creds.default_channel || "#general";
+      const channel = to || creds.default_channel;
+      if (!channel) throw new Error("Slack: no channel to post to");
       const r = await sendSlackMessage(creds, channel, body);
       return { remoteId: r.ts };
     }
-    case "email":
+    case "email": {
+      const r = await sendEmail(credentials, { to, subject: subject ?? "Message from your team", text: body });
+      return { remoteId: r.id };
+    }
     case "gmail": {
-      const creds = credentials as unknown as EmailCredentials;
-      const r = await sendEmail(
-        { from: creds.from || "noreply@arabclue.com", reply_to: creds.reply_to, api_key: creds.api_key },
-        { to, subject: subject ?? "Message from your team", text: body }
+      const r = await sendGmailMessage(
+        credentials,
+        { to, subject: subject ?? "Message from your team", text: body },
+        {
+          onTokenRefresh: async (next: RefreshedGoogleToken) => {
+            await hooks.onCredentialsRefreshed?.({
+              access_token: next.access_token,
+              ...(next.token_expires_at ? { token_expires_at: next.token_expires_at } : {})
+            });
+          }
+        }
       );
       return { remoteId: r.id };
     }

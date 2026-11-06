@@ -24,7 +24,7 @@ export async function getPlatformStats() {
     supabase
       .from("events")
       .select("id", { count: "exact", head: true })
-      .in("kind", ["social.escalation", "voice.escalation"]),
+      .in("kind", ["social.escalation", "voice.escalation", "employee.escalation"]),
     supabase.from("billing_payments").select("id", { count: "exact", head: true }),
     supabase.from("social_channels").select("id", { count: "exact", head: true })
   ]);

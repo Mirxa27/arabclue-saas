@@ -22,6 +22,7 @@ export const OAUTH_ERROR_CODES = [
   "account_lookup_failed",
   "store_already_linked",
   "channel_already_connected",
+  "dpa_required",
   "save_failed",
   "unknown"
 ] as const;
@@ -86,6 +87,10 @@ export const OAUTH_ERROR_MESSAGES: Record<OAuthErrorCode, OAuthErrorText> = {
   channel_already_connected: {
     ar: "هذا الحساب مربوط بالفعل بمتجر آخر على arabclue. افصله من هناك أولًا، أو اربط حسابًا آخر.",
     en: "This account is already connected to another arabclue store. Disconnect it there first, or connect a different account."
+  },
+  dpa_required: {
+    ar: "وافق على اتفاقية معالجة البيانات المحدّثة أولًا، ثم اربط القناة التي يتواصل فيها الموظف مع عملائك.",
+    en: "Accept the updated Data Processing Agreement first, then connect the channel where the employee talks to your customers."
   },
   save_failed: {
     ar: "تعذّر حفظ الربط. حاول مرة أخرى.",

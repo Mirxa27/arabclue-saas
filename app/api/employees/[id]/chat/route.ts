@@ -1,81 +1,39 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { z } from "zod";
-import { requireMerchantApi } from "@/lib/auth/session";
-import { getServerSupabase } from "@/lib/db/supabase";
-import { handleRouteError } from "@/lib/api/route-handler";
-import { notFound } from "@/lib/api/errors";
-import { respond, upsertConversation } from "@/lib/employees/runtime";
+import { chatWithEmployee, ChatSchema, conversationTranscript } from "@/lib/employees/chat";
+import { employeeRouteError, isUuid } from "@/lib/employees/http";
+import { requireOwnedEmployee } from "@/lib/employees/route-helpers";
 import { enforceRateLimit } from "@/lib/security/rate-limit";
 
 export const dynamic = "force-dynamic";
 
-const ChatSchema = z.object({
-  message: z.string().min(1).max(4000),
-  conversation_id: z.string().uuid().optional()
-});
-
-async function assertEmployeeOwned(id: string): Promise<string> {
-  const merchant = await requireMerchantApi();
-  const sb = await getServerSupabase();
-  const { data, error } = await sb
-    .from("ai_employees")
-    .select("id")
-    .eq("id", id)
-    .eq("merchant_id", merchant.id)
-    .single();
-  if (error || !data) throw notFound("Employee");
-  return data.id as string;
-}
-
 // POST /api/employees/:id/chat — dashboard chat with the employee
+//   body { message, conversation_id? } → { conversation_id, reply, message_id, latency_ms }
+//   402 plan_required | seat_unpaid, 409 employee_inactive, 404 conversation_not_found
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }): Promise<NextResponse> {
   try {
-    const limited = await enforceRateLimit(req, "employees:chat", 60, 60_000, (await ctx.params).id);
+    const { id } = await ctx.params;
+    const limited = await enforceRateLimit(req, "employees:chat", 60, 60_000, id);
     if (limited instanceof NextResponse) return limited;
 
-    const employeeId = await assertEmployeeOwned((await ctx.params).id);
+    const { merchant, employee } = await requireOwnedEmployee(id);
     const body = ChatSchema.parse(await req.json());
-
-    const conversationId =
-      body.conversation_id ??
-      (await upsertConversation({
-        employeeId,
-        channel: "dashboard",
-        externalId: `dashboard:${employeeId}`
-      })).id;
-
-    const result = await respond({
-      employeeId,
-      conversationId,
-      userMessage: body.message
-    });
-
-    return NextResponse.json({
-      conversation_id: conversationId,
-      reply: result.reply,
-      message_id: result.messageId,
-      latency_ms: result.latencyMs
-    });
+    return NextResponse.json(await chatWithEmployee(merchant, employee, body));
   } catch (err) {
-    return handleRouteError(err, { route: "POST /api/employees/:id/chat" });
+    return employeeRouteError(err, "POST /api/employees/:id/chat");
   }
 }
 
-// GET /api/employees/:id/chat?conversation_id=... — fetch transcript
+// GET /api/employees/:id/chat?conversation_id=... — fetch transcript (404 for another employee's conversation)
 export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }): Promise<NextResponse> {
   try {
-    await assertEmployeeOwned((await ctx.params).id);
-    const url = new URL(req.url);
-    const convoId = url.searchParams.get("conversation_id");
+    const { employee } = await requireOwnedEmployee((await ctx.params).id);
+    const convoId = req.nextUrl.searchParams.get("conversation_id");
     if (!convoId) return NextResponse.json({ messages: [] });
-    const sb = await getServerSupabase();
-    const { data } = await sb
-      .from("ai_employee_messages")
-      .select("*")
-      .eq("conversation_id", convoId)
-      .order("created_at", { ascending: true });
-    return NextResponse.json({ messages: data ?? [] });
+    if (!isUuid(convoId)) {
+      return NextResponse.json({ error: "conversation_id must be a uuid", code: "invalid_request" }, { status: 400 });
+    }
+    return NextResponse.json({ messages: await conversationTranscript(employee.id, convoId) });
   } catch (err) {
-    return handleRouteError(err, { route: "GET /api/employees/:id/chat" });
+    return employeeRouteError(err, "GET /api/employees/:id/chat");
   }
 }

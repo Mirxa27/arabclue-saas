@@ -16,7 +16,7 @@ const sendEmail = vi.hoisted(() =>
   vi.fn(async (_creds: { from: string; reply_to?: string }, _msg: { to: string; subject: string; text: string }) => ({ id: "em_1" }))
 );
 
-vi.mock("@/lib/employees/channels/email", () => ({ sendEmail }));
+vi.mock("@/lib/email/platform", () => ({ sendPlatformEmail: sendEmail }));
 vi.mock("@/lib/db/supabase", () => ({
   getServiceSupabase: () => h.service.client,
   getServerSupabase: async () => {

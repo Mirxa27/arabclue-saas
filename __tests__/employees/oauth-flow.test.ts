@@ -10,13 +10,14 @@ import { setCookies } from "../helpers/fake-gotrue";
 import { fakeSupabase, type QueryResult } from "../helpers/fake-supabase";
 import { createEmployeeOAuthState, verifyEmployeeOAuthState } from "@/lib/employees/oauth/state";
 
-const MERCHANT_A = { id: "aaaaaaaa-0000-4000-8000-00000000000a", owner_user_id: "user-a" };
-const MERCHANT_B = { id: "bbbbbbbb-0000-4000-8000-00000000000b", owner_user_id: "user-b" };
+// dpa_version "2026-11" = CURRENT_DPA_VERSION (Gmail is a customer-facing channel).
+const MERCHANT_A = { id: "aaaaaaaa-0000-4000-8000-00000000000a", owner_user_id: "user-a", dpa_version: "2026-11" as string | null };
+const MERCHANT_B = { id: "bbbbbbbb-0000-4000-8000-00000000000b", owner_user_id: "user-b", dpa_version: "2026-11" as string | null };
 const EMPLOYEE = "eeeeeeee-0000-4000-8000-0000000000e1";
 
 const auth = vi.hoisted(() => ({
   user: null as null | { id: string },
-  merchant: null as null | { id: string; owner_user_id: string }
+  merchant: null as null | { id: string; owner_user_id: string; dpa_version: string | null }
 }));
 const db = vi.hoisted(() => ({ user: {} as Record<string, QueryResult>, service: {} as Record<string, QueryResult> }));
 const fetchMock = vi.hoisted(() => vi.fn());

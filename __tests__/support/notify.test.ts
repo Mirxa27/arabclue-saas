@@ -7,7 +7,7 @@ const sendEmail = vi.hoisted(() =>
     })
   )
 );
-vi.mock("@/lib/employees/channels/email", () => ({ sendEmail }));
+vi.mock("@/lib/email/platform", () => ({ sendPlatformEmail: sendEmail }));
 
 import { sendSupportAck, buildSupportAckEmail } from "@/lib/support/notify";
 

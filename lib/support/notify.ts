@@ -6,7 +6,7 @@
  * as the rest of the app. Throws when the transport is unavailable — callers run
  * this best-effort so a missing email config never fails the support submission.
  */
-import { sendEmail } from "@/lib/employees/channels/email";
+import { sendPlatformEmail as sendEmail } from "@/lib/email/platform";
 
 export type SupportCategory = "help" | "bug" | "feature" | "billing";
 

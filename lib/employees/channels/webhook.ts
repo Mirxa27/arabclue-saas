@@ -1,14 +1,27 @@
 /**
  * Generic outbound webhook channel.
  *
- * Lets an employee deliver messages/events to any HTTPS endpoint the merchant
- * controls (their own CRM, a Zapier/Make hook, an internal service). The payload
- * is JSON and — when a `signing_secret` is configured — signed with HMAC-SHA256
- * in the `X-Arabclue-Signature` header so the receiver can verify authenticity.
+ * Lets an employee deliver messages/events to an HTTPS endpoint the merchant controls
+ * (their own CRM, a Zapier/Make hook, an internal service of theirs on the public
+ * internet). The payload is JSON and — when a `signing_secret` is configured — signed with
+ * HMAC-SHA256 in the `X-Arabclue-Signature` header so the receiver can verify it.
+ *
+ * SW-4: the URL is merchant-controlled, so delivery goes through the shared outbound guard
+ * (lib/security/outbound-http.ts): every resolved address must be public, the connection
+ * is pinned to the checked address, redirects are not followed, time and size are capped,
+ * and the receiver's response body is never read into an error, a log or a model prompt.
  *
  * Outbound delivery is the whole feature here; there is no inbound counterpart.
  */
-import { createHmac } from "crypto";
+import { createHmac, randomBytes } from "crypto";
+import {
+  OutboundUrlError,
+  parsePublicHttpUrl,
+  requestPublicUrl,
+  resolvePublicHttpTarget,
+  sanitizeTenantHeaders,
+  type LookupAll
+} from "@/lib/security/outbound-http";
 
 export type WebhookCredentials = {
   url: string;
@@ -18,62 +31,37 @@ export type WebhookCredentials = {
 
 export type WebhookSendResult = { id: string; status: number };
 
+const DELIVERY_TIMEOUT_MS = 10_000;
+
 /**
- * Best-effort SSRF guard: reject delivery to loopback / private / link-local
- * hosts by literal inspection. DNS-rebinding is out of scope (would require
- * resolving and pinning the address); this blocks the common accidental and
- * naive-malicious cases (localhost, 169.254.169.254 metadata, RFC1918).
+ * Synchronous URL check (scheme, credentials, port, IP literals, internal names). Kept for
+ * callers that only have the text; delivery and connect also resolve DNS.
  */
 export function assertPublicHttpUrl(raw: string): URL {
-  let u: URL;
   try {
-    u = new URL(raw);
-  } catch {
-    throw new Error("Webhook: url is not a valid URL");
+    return parsePublicHttpUrl(raw);
+  } catch (err) {
+    if (err instanceof OutboundUrlError) throw new Error(`Webhook: ${err.message}`);
+    throw err;
   }
-  if (u.protocol !== "https:" && u.protocol !== "http:") {
-    throw new Error("Webhook: url must be http(s)");
-  }
-  // WHATWG URL keeps IPv6 literals bracketed (e.g. "[::1]") — strip for matching.
-  const host = u.hostname.toLowerCase().replace(/^\[/, "").replace(/\]$/, "");
-  if (
-    host === "localhost" ||
-    host === "ip6-localhost" ||
-    host === "ip6-loopback" ||
-    host.endsWith(".local") ||
-    host.endsWith(".internal")
-  ) {
-    throw new Error("Webhook: refusing to deliver to a loopback/private host");
-  }
-  const v4 = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
-  if (v4) {
-    const a = Number(v4[1]);
-    const b = Number(v4[2]);
-    const isPrivate =
-      a === 0 ||
-      a === 10 ||
-      a === 127 ||
-      (a === 169 && b === 254) || // link-local incl. cloud metadata
-      (a === 172 && b >= 16 && b <= 31) ||
-      (a === 192 && b === 168);
-    if (isPrivate) throw new Error("Webhook: refusing to deliver to a private IPv4 range");
-  }
-  if (host === "::1" || host.startsWith("fc") || host.startsWith("fd") || host.startsWith("fe80")) {
-    throw new Error("Webhook: refusing to deliver to a private IPv6 range");
-  }
-  return u;
+}
+
+/** Connect-time check: the URL text and every address its host resolves to (OutboundUrlError when refused). */
+export async function verifyWebhookUrl(raw: string, opts: { lookup?: LookupAll } = {}): Promise<URL> {
+  const { url } = await resolvePublicHttpTarget(raw, opts);
+  return url;
 }
 
 export async function sendWebhookMessage(
   creds: WebhookCredentials,
   to: string,
   body: string,
-  subject?: string
+  subject?: string,
+  opts: { lookup?: LookupAll } = {}
 ): Promise<WebhookSendResult> {
   if (!creds.url) throw new Error("Webhook: url missing");
-  assertPublicHttpUrl(creds.url);
 
-  const id = `whk_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+  const id = `whk_${Date.now().toString(36)}${randomBytes(4).toString("hex")}`;
   const payload = JSON.stringify({
     id,
     type: "employee.message",
@@ -84,19 +72,30 @@ export async function sendWebhookMessage(
   });
 
   const headers: Record<string, string> = {
+    ...sanitizeTenantHeaders(creds.headers),
     "content-type": "application/json",
-    "user-agent": "arabclue-employee-webhook/1",
-    ...(creds.headers ?? {})
+    "user-agent": "arabclue-employee-webhook/1"
   };
   if (creds.signing_secret) {
     const sig = createHmac("sha256", creds.signing_secret).update(payload).digest("hex");
     headers["x-arabclue-signature"] = `sha256=${sig}`;
   }
 
-  const res = await fetch(creds.url, { method: "POST", headers, body: payload });
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`Webhook delivery failed: ${res.status} ${text.slice(0, 160)}`);
+  let status: number;
+  try {
+    ({ status } = await requestPublicUrl(creds.url, {
+      method: "POST",
+      headers,
+      body: payload,
+      timeoutMs: DELIVERY_TIMEOUT_MS,
+      lookup: opts.lookup
+    }));
+  } catch (err) {
+    if (err instanceof OutboundUrlError) throw new Error(`Webhook: refused — ${err.message}`);
+    throw new Error(`Webhook delivery failed: ${err instanceof Error ? err.message : "network error"}`);
   }
-  return { id, status: res.status };
+  // Only the status is reported; the receiver's body never leaves this function.
+  if (status >= 300 && status < 400) throw new Error(`Webhook delivery failed: HTTP ${status} (redirects are not followed)`);
+  if (status < 200 || status >= 300) throw new Error(`Webhook delivery failed: HTTP ${status}`);
+  return { id, status };
 }

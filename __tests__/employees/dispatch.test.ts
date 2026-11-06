@@ -14,6 +14,9 @@ vi.mock("@/lib/employees/channels/slack", () => ({
 vi.mock("@/lib/employees/channels/email", () => ({
   sendEmail: vi.fn(async () => ({ id: "em1" }))
 }));
+vi.mock("@/lib/employees/channels/gmail", () => ({
+  sendGmailMessage: vi.fn(async () => ({ id: "gm1" }))
+}));
 vi.mock("@/lib/employees/channels/sms", () => ({
   sendSms: vi.fn(async () => ({ sid: "SM1" }))
 }));
@@ -32,6 +35,7 @@ import {
 } from "@/lib/employees/channels/dispatch";
 import { sendSlackMessage } from "@/lib/employees/channels/slack";
 import { sendEmail } from "@/lib/employees/channels/email";
+import { sendGmailMessage } from "@/lib/employees/channels/gmail";
 import { sendMetaDirectMessage } from "@/lib/employees/channels/meta";
 
 const base = { to: "+966500000000", body: "مرحبا" };
@@ -47,22 +51,26 @@ describe("dispatchChannelSend routing", () => {
     expect(await dispatchChannelSend({ kind: "telegram", credentials: {}, ...base })).toEqual({ remoteId: "42" });
   });
 
-  it("routes slack and falls back to #general when no target", async () => {
-    const r = await dispatchChannelSend({ kind: "slack", credentials: {}, to: "", body: "hi" });
-    expect(r).toEqual({ remoteId: "169.7" });
-    expect((sendSlackMessage as unknown as Mock).mock.calls[0][1]).toBe("#general");
+  it("routes slack to the given target, else the configured default channel — never a guessed #general", async () => {
+    await dispatchChannelSend({ kind: "slack", credentials: { default_channel: "C0DEFAULT1" }, to: "", body: "hi" });
+    expect((sendSlackMessage as unknown as Mock).mock.calls[0][1]).toBe("C0DEFAULT1");
+    await expect(dispatchChannelSend({ kind: "slack", credentials: {}, to: "", body: "hi" })).rejects.toThrow(/no channel/);
+    expect(sendSlackMessage).toHaveBeenCalledTimes(1);
   });
 
-  it("routes email with a sensible default from", async () => {
-    const r = await dispatchChannelSend({ kind: "email", credentials: {}, to: "a@b.com", body: "hi" });
+  it("SW-6: routes email with the merchant's own credentials — no platform default sender", async () => {
+    const creds = { from: "layla@shop.sa", api_key: "re_merchant" };
+    const r = await dispatchChannelSend({ kind: "email", credentials: creds, to: "a@b.com", body: "hi" });
     expect(r).toEqual({ remoteId: "em1" });
-    expect((sendEmail as unknown as Mock).mock.calls[0][0].from).toBe("noreply@arabclue.com");
+    expect((sendEmail as unknown as Mock).mock.calls[0][0]).toEqual(creds);
+    expect(JSON.stringify((sendEmail as unknown as Mock).mock.calls)).not.toContain("noreply@arabclue.com");
   });
 
-  it("routes gmail through the email adapter and honours a configured from", async () => {
-    const r = await dispatchChannelSend({ kind: "gmail", credentials: { from: "x@y.com" }, to: "a@b.com", body: "hi" });
-    expect(r).toEqual({ remoteId: "em1" });
-    expect((sendEmail as unknown as Mock).mock.calls[0][0].from).toBe("x@y.com");
+  it("SW-6: routes gmail through the Gmail API adapter, not the email (Resend) adapter", async () => {
+    const r = await dispatchChannelSend({ kind: "gmail", credentials: { access_token: "ya29.x" }, to: "a@b.com", body: "hi" });
+    expect(r).toEqual({ remoteId: "gm1" });
+    expect(sendGmailMessage).toHaveBeenCalledTimes(1);
+    expect(sendEmail).not.toHaveBeenCalled();
   });
 
   it("routes twilio_sms", async () => {

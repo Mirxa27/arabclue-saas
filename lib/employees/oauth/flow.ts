@@ -30,7 +30,17 @@ import {
 } from "@/lib/oauth/flow-cookie";
 import { getOAuthProvider } from "@/lib/employees/oauth/providers";
 import { createEmployeeOAuthState, verifyEmployeeOAuthState, type EmployeeOAuthState } from "@/lib/employees/oauth/state";
+import {
+  assertSendable,
+  OAUTH_CHANNEL_KINDS,
+  oauthChannelSetup,
+  OAuthChannelSetupError,
+  subscribeWhatsAppWebhooks,
+  type OAuthChannelSetup,
+  type SetupState
+} from "@/lib/employees/oauth/channel-setup";
 import { encryptIntegrationCredentials } from "@/lib/employees/credentials";
+import { channelNeedsDpa } from "@/lib/employees/dpa-gate";
 import type { IntegrationKind } from "@/lib/employees/types";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -46,17 +56,24 @@ export function defaultEmployeeReturnTo(employeeId: string): string {
   return `/employees/${employeeId}?tab=integrations`;
 }
 
-/** Workspace URL with the outcome flags (relative, validated). */
+/**
+ * Workspace URL with the outcome flags (relative, validated):
+ *   oauth=connected | error | setup_required, oauth_kind=<kind>,
+ *   oauth_note=<OAuthErrorCode> on error, oauth_setup=<SetupState> when the provider account
+ *   needs a choice before it can send (finish with PATCH /api/employees/:id/integrations).
+ */
 export function employeeOAuthResultPath(
   returnTo: string | null | undefined,
-  outcome: { kind?: string; error?: OAuthErrorCode }
+  outcome: { kind?: string; error?: OAuthErrorCode; setup?: SetupState }
 ): string {
   const url = new URL(safeRedirectPath(returnTo) ?? "/employees", PLACEHOLDER_ORIGIN);
-  url.searchParams.set("oauth", outcome.error ? "error" : "connected");
+  url.searchParams.set("oauth", outcome.error ? "error" : outcome.setup ? "setup_required" : "connected");
   if (outcome.kind) url.searchParams.set("oauth_kind", outcome.kind);
   else url.searchParams.delete("oauth_kind");
   if (outcome.error) url.searchParams.set("oauth_note", outcome.error);
   else url.searchParams.delete("oauth_note");
+  if (outcome.setup && !outcome.error) url.searchParams.set("oauth_setup", outcome.setup);
+  else url.searchParams.delete("oauth_setup");
   return `${url.pathname}${url.search}${url.hash}`;
 }
 
@@ -64,7 +81,14 @@ export function employeeOAuthResultPath(
 
 export async function beginEmployeeOAuth(
   req: NextRequest,
-  args: { merchantId: string; employeeId: string; kind: string; returnTo: string | null }
+  args: {
+    merchantId: string;
+    /** merchants.dpa_version of the signed-in merchant (customer-facing channels need the current DPA). */
+    merchantDpaVersion: string | null | undefined;
+    employeeId: string;
+    kind: string;
+    returnTo: string | null;
+  }
 ): Promise<NextResponse> {
   const returnTo = safeRedirectPath(args.returnTo) ?? defaultEmployeeReturnTo(args.employeeId);
   // Only a registry kind is echoed back in the redirect, never the raw URL segment.
@@ -84,6 +108,7 @@ export async function beginEmployeeOAuth(
 
   if (!provider) return fail("unknown_provider");
   if (!provider.clientId()) return fail("not_configured");
+  if (channelNeedsDpa(provider.kind, { dpa_version: args.merchantDpaVersion ?? null })) return fail("dpa_required");
 
   const nonce = newOAuthNonce();
   const pkce = provider.usesPkce ? generatePkcePair() : undefined;
@@ -114,8 +139,8 @@ export async function completeEmployeeOAuth(req: NextRequest): Promise<NextRespo
   let state: EmployeeOAuthState | null = null;
   let merchantId: string | undefined;
 
-  const finish = (error?: OAuthErrorCode, detail?: unknown): NextResponse => {
-    if (error && error !== "provider_denied") {
+  const finish = (error?: OAuthErrorCode, detail?: unknown, setup?: SetupState): NextResponse => {
+    if (error && error !== "provider_denied" && error !== "dpa_required") {
       const report = oauthFailureReport(error, detail);
       reportError(report.error, {
         route: ROUTE,
@@ -128,7 +153,7 @@ export async function completeEmployeeOAuth(req: NextRequest): Promise<NextRespo
         }
       });
     }
-    const res = relativeRedirect(employeeOAuthResultPath(state?.returnTo, { kind: state?.kind, error }));
+    const res = relativeRedirect(employeeOAuthResultPath(state?.returnTo, { kind: state?.kind, error, setup }));
     clearOAuthFlowCookie(res, req, "employee");
     return res;
   };
@@ -173,6 +198,7 @@ export async function completeEmployeeOAuth(req: NextRequest): Promise<NextRespo
     if (!provider) return finish("unknown_provider");
     if (!provider.clientId()) return finish("not_configured");
     if (provider.usesPkce && !binding?.codeVerifier) return finish("state_mismatch");
+    if (channelNeedsDpa(provider.kind, merchant)) return finish("dpa_required");
 
     let tokens;
     try {
@@ -200,21 +226,43 @@ export async function completeEmployeeOAuth(req: NextRequest): Promise<NextRespo
       }
     }
 
-    const credsToStore: Record<string, unknown> = {
-      access_token: tokens.access_token,
-      refresh_token: tokens.refresh_token,
-      token_type: tokens.token_type,
-      expires_in: tokens.expires_in,
-      scope: tokens.scope,
-      external_label: externalLabel ?? undefined
-    };
-    for (const key of Object.keys(credsToStore)) {
-      if (credsToStore[key] === undefined) delete credsToStore[key];
+    let credsToStore: Record<string, unknown>;
+    let config: Record<string, unknown> = { connected_via: "oauth" };
+    let status: "connected" | "disconnected" = "connected";
+    let setup: OAuthChannelSetup | null = null;
+
+    if (OAUTH_CHANNEL_KINDS.has(state.kind)) {
+      // Messaging channels: store the keys the send adapter reads (SW-7), or a pending setup.
+      try {
+        const email = externalLabel && externalLabel.includes("@") ? externalLabel : null;
+        setup = await oauthChannelSetup(state.kind, tokens, { email });
+        if (setup) setup = assertSendable(state.kind, setup);
+      } catch (err) {
+        if (err instanceof OAuthChannelSetupError) return finish(err.code, err);
+        return finish("account_lookup_failed", err);
+      }
     }
 
-    const expiresAt = tokens.expires_in ? new Date(Date.now() + tokens.expires_in * 1000).toISOString() : null;
-    const config: Record<string, unknown> = { connected_via: "oauth" };
-    if (expiresAt) config.token_expires_at = expiresAt;
+    if (setup) {
+      credsToStore = setup.credentials;
+      config = { ...config, ...setup.config, ...(setup.setup ? { setup: setup.setup } : {}) };
+      status = setup.status === "connected" ? "connected" : "disconnected";
+      if (setup.externalId) externalId = setup.externalId;
+    } else {
+      credsToStore = {
+        access_token: tokens.access_token,
+        refresh_token: tokens.refresh_token,
+        token_type: tokens.token_type,
+        expires_in: tokens.expires_in,
+        scope: tokens.scope,
+        external_label: externalLabel ?? undefined
+      };
+      for (const key of Object.keys(credsToStore)) {
+        if (credsToStore[key] === undefined) delete credsToStore[key];
+      }
+      const expiresAt = tokens.expires_in ? new Date(Date.now() + tokens.expires_in * 1000).toISOString() : null;
+      if (expiresAt) config.token_expires_at = expiresAt;
+    }
 
     const sb = getServiceSupabase();
     const { error: upsertErr } = await sb.from("ai_employee_integrations").upsert(
@@ -224,12 +272,29 @@ export async function completeEmployeeOAuth(req: NextRequest): Promise<NextRespo
         external_id: externalId,
         credentials: encryptIntegrationCredentials(credsToStore),
         config,
-        status: "connected" as const,
+        status,
         last_event_at: new Date().toISOString()
       },
       { onConflict: "employee_id,kind" }
     );
     if (upsertErr) return finish("save_failed", upsertErr);
+
+    // WhatsApp: point the WABA's webhooks at this employee now that the row (and its verify
+    // token, which Meta checks against the callback) is saved. Failure is recorded, not fatal.
+    if (state.kind === "whatsapp" && status === "connected") {
+      const waba = typeof credsToStore.waba_id === "string" ? credsToStore.waba_id : null;
+      const verifyToken = typeof credsToStore.verify_token === "string" ? credsToStore.verify_token : null;
+      const accessToken = typeof credsToStore.access_token === "string" ? credsToStore.access_token : null;
+      if (waba && verifyToken && accessToken) {
+        const sub = await subscribeWhatsAppWebhooks({ employeeId: state.employeeId, wabaId: waba, accessToken, verifyToken });
+        const { error: subErr } = await sb
+          .from("ai_employee_integrations")
+          .update({ config: { ...config, subscribed: sub.subscribed, ...(sub.error ? { subscribe_error: sub.error } : {}) } })
+          .eq("employee_id", state.employeeId)
+          .eq("kind", "whatsapp");
+        if (subErr) reportError(subErr, { route: ROUTE, merchantId, extra: { step: "whatsapp_subscription" } });
+      }
+    }
 
     // Activity feed entry; the connection itself is already saved.
     const { error: logErr } = await sb.from("ai_employee_actions").insert({
@@ -237,12 +302,12 @@ export async function completeEmployeeOAuth(req: NextRequest): Promise<NextRespo
       action: "oauth_connect",
       channel: state.kind,
       target: externalLabel ?? null,
-      result: { provider: provider.label },
-      status: "success"
+      result: { provider: provider.label, ...(setup?.setup ? { setup_required: setup.setup.state } : {}) },
+      status: status === "connected" ? "success" : "retry"
     });
     if (logErr) reportError(logErr, { route: ROUTE, merchantId, extra: { step: "action_log" } });
 
-    return finish();
+    return finish(undefined, undefined, setup?.setup?.state);
   } catch (err) {
     return finish("unknown", err);
   }
