@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { useMerchant } from "@/hooks/use-merchant";
 import { apiFetch, ApiClientError } from "@/lib/api/client";
 import { getRole, formatPriceSAR } from "@/lib/employees/catalog";
+import { inboundRejectionCopy } from "@/lib/employees/integration-errors";
 import type {
   AIActionRow,
   AIConversationRow,
@@ -366,6 +367,7 @@ export function EmployeeWorkspaceClient({ employeeId }: { employeeId: string }) 
                     <Badge tone={a.status === "success" ? "success" : "warn"} className="ml-2">
                       {a.status}
                     </Badge>
+                    <InboundRejectionNote action={a} />
                   </li>
                 ))}
               </ul>
@@ -374,6 +376,18 @@ export function EmployeeWorkspaceClient({ employeeId }: { employeeId: string }) 
         )}
       </div>
     </PageShell>
+  );
+}
+
+/** Why a channel's inbound deliveries were refused — fixed Arabic + English copy for the stable reason code. */
+function InboundRejectionNote({ action }: { action: AIActionRow }) {
+  const copy = inboundRejectionCopy(action);
+  if (!copy) return null;
+  return (
+    <div className="mt-1 font-sans text-ink-soft">
+      <p className="font-arabic" dir="rtl" lang="ar">{copy.ar}</p>
+      <p>{copy.en}</p>
+    </div>
   );
 }
 

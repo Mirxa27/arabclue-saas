@@ -1,9 +1,12 @@
 import { createHmac } from "crypto";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  claimedMetaKind,
+  isMetaSignatureHeader,
   META_DEFAULT_MAX_AGE_MS,
   metaAccountIdFor,
   metaAppSecretFor,
+  metaDmEndpoint,
   metaKindForObject,
   metaVerifyTokenFor,
   metaWebhookEventId,
@@ -88,16 +91,66 @@ describe("secret / token / account resolution", () => {
   it("prefers the integration's values and falls back to the env only when absent", () => {
     process.env.META_APP_SECRET = "env-app-secret";
     process.env.META_WEBHOOK_VERIFY_TOKEN = "env-verify-token";
-    expect(metaAppSecretFor({ app_secret: "own" })).toBe("own");
-    expect(metaAppSecretFor({ app_secret: "  " })).toBe("env-app-secret");
-    expect(metaAppSecretFor({})).toBe("env-app-secret");
+    expect(metaAppSecretFor({ credentials: { app_secret: "own" }, config: { connected_via: "manual" } })).toBe("own");
     expect(metaVerifyTokenFor({ verify_token: "own-token" })).toBe("own-token");
     expect(metaVerifyTokenFor({})).toBe("env-verify-token");
   });
 
-  it("returns null when neither is configured (the route then refuses the delivery)", () => {
-    expect(metaAppSecretFor({})).toBeNull();
+  it("RB-W1: META_APP_SECRET verifies only rows whose Page token was proven to belong to the platform app", () => {
+    process.env.META_APP_SECRET = "env-app-secret";
+    // Bring-your-own-app rows: Meta signs with the merchant app's secret, never the platform's.
+    expect(metaAppSecretFor({ credentials: {}, config: { connected_via: "manual" } })).toBeNull();
+    expect(metaAppSecretFor({ credentials: { app_secret: "  " }, config: { connected_via: "manual" } })).toBeNull();
+    expect(metaAppSecretFor({ credentials: {}, config: {} })).toBeNull();
+    expect(metaAppSecretFor({ credentials: {}, config: null })).toBeNull();
+    // The OAuth publishing row is the platform app's, but it is not a DM row; no fallback either.
+    expect(metaAppSecretFor({ credentials: { access_token: "user-token" }, config: { connected_via: "oauth" } })).toBeNull();
+    // Proven at connect (server-owned config.connected_via = 'platform').
+    expect(metaAppSecretFor({ credentials: {}, config: { connected_via: "platform" } })).toBe("env-app-secret");
+    expect(metaAppSecretFor({ credentials: { app_secret: "own" }, config: { connected_via: "platform" } })).toBe("own");
+  });
+
+  it("returns null when nothing is configured (the route then refuses the delivery)", () => {
+    expect(metaAppSecretFor({ credentials: {}, config: { connected_via: "platform" } })).toBeNull();
     expect(metaVerifyTokenFor(undefined)).toBeNull();
+  });
+
+  it("RB-W2: a row is a DM endpoint only with a Page token, the Page id and the kind's account id", () => {
+    const dmCreds = { page_id: PAGE, page_access_token: "EAAPAGE", ig_account_id: IG };
+    expect(metaDmEndpoint({ kind: "meta", credentials: { page_id: PAGE, page_access_token: "EAAPAGE" } })).toEqual({
+      kind: "meta",
+      pageId: PAGE,
+      accountId: PAGE
+    });
+    expect(metaDmEndpoint({ kind: "instagram", credentials: dmCreds })).toEqual({ kind: "instagram", pageId: PAGE, accountId: IG });
+    // The employee OAuth flow's Instagram row (content publishing): a user token, no Page / IG ids.
+    expect(metaDmEndpoint({ kind: "instagram", credentials: { access_token: "EAAuser", scope: "instagram_basic" } })).toBeNull();
+    expect(metaDmEndpoint({ kind: "instagram", credentials: { page_id: PAGE, page_access_token: "EAAPAGE" } })).toBeNull();
+    expect(metaDmEndpoint({ kind: "instagram", credentials: { page_access_token: "EAAPAGE", ig_account_id: IG } })).toBeNull();
+    expect(metaDmEndpoint({ kind: "meta", credentials: { page_id: PAGE, page_access_token: "   " } })).toBeNull();
+    expect(metaDmEndpoint({ kind: "meta", credentials: { page_id: PAGE } })).toBeNull();
+    expect(metaDmEndpoint({ kind: "meta", credentials: null })).toBeNull();
+    expect(metaDmEndpoint({ kind: "whatsapp", credentials: dmCreds })).toBeNull();
+  });
+
+  it("claimedMetaKind reads an unverified body's object without trusting anything else", () => {
+    expect(claimedMetaKind(Buffer.from('{"object":"instagram","entry":[]}'))).toBe("instagram");
+    expect(claimedMetaKind(Buffer.from('{"object":"page"}'))).toBe("meta");
+    expect(claimedMetaKind(Buffer.from('{"object":"whatsapp_business_account"}'))).toBeNull();
+    expect(claimedMetaKind(Buffer.from("not json"))).toBeNull();
+    expect(claimedMetaKind(Buffer.from("[1,2]"))).toBeNull();
+    expect(claimedMetaKind(Buffer.from("null"))).toBeNull();
+  });
+
+  it("isMetaSignatureHeader accepts only the sha256=<64 hex> shape Meta sends", () => {
+    const hex = "a".repeat(64);
+    expect(isMetaSignatureHeader(`sha256=${hex}`)).toBe(true);
+    expect(isMetaSignatureHeader(`sha256=${hex.toUpperCase()}`)).toBe(true);
+    expect(isMetaSignatureHeader(null)).toBe(false);
+    expect(isMetaSignatureHeader("")).toBe(false);
+    expect(isMetaSignatureHeader(hex)).toBe(false);
+    expect(isMetaSignatureHeader(`sha1=${hex.slice(0, 40)}`)).toBe(false);
+    expect(isMetaSignatureHeader(`sha256=${hex}0`)).toBe(false);
   });
 
   it("maps objects to kinds and kinds to account ids", () => {

@@ -255,7 +255,7 @@ deduplicated (`webhook_events`), and slow AI work runs after the acknowledgement
 | `/api/voice/webhook` (telephony bridge) | `Authorization: Bearer` | `VOICE_BRIDGE_SECRET` |
 | `/api/social/inbound` (internal automation) | `Authorization: Bearer` | `SOCIAL_INBOUND_SECRET`, else `CRON_SECRET` |
 | `/api/employees/webhooks/whatsapp/{employeeId}` | `X-Hub-Signature-256` | the integration's `app_secret` (OAuth-connected: `META_APP_SECRET`) |
-| `/api/employees/webhooks/meta/{employeeId}` (Messenger + Instagram) | `X-Hub-Signature-256` | the integration's `app_secret` (else `META_APP_SECRET`) |
+| `/api/employees/webhooks/meta/{employeeId}` (Messenger + Instagram) | `X-Hub-Signature-256` | the integration's `app_secret` (Page token issued by the platform app: `META_APP_SECRET`) |
 | `/api/employees/webhooks/slack/{employeeId}` | `X-Slack-Signature` | the integration's `signing_secret`, else `SLACK_SIGNING_SECRET` |
 | `/api/employees/webhooks/telegram/{employeeId}` | `X-Telegram-Bot-Api-Secret-Token` | generated when the bot is connected |
 | `/api/employees/webhooks/sms/{employeeId}` | `X-Twilio-Signature` | the integration's `auth_token` |
@@ -289,6 +289,12 @@ that subscribed the Page, signed with that app's secret). One app serves both ch
    access token, the app's **App Secret** (App settings → Basic) and a verify token you choose
    (16+ characters). arabclue checks the token really belongs to that Page, resolves the linked
    Instagram account, subscribes the Page to `messages`, and returns the callback URL.
+   The App Secret is **required**: Meta signs the webhooks with the secret of the app the Page
+   token was generated in. Only a Page token issued by the platform app itself (`META_APP_ID`,
+   checked with Meta's `debug_token`) may omit it — that channel is saved with
+   `connected_via: "platform"` and verified with `META_APP_SECRET`, and its DMs reach this URL only
+   if the platform app's Page / Instagram callback points here (single-merchant deployments; the
+   multi-tenant `/api/meta/webhook` does not route DMs to employees).
 8. In the Meta app's **Webhooks** settings, for both the **Page** and the **Instagram** objects,
    set the callback URL to `https://<your-domain>/api/employees/webhooks/meta/{employeeId}` and
    the same verify token, click **Verify and save**, then subscribe the field **`messages`**
@@ -301,6 +307,12 @@ that subscribed the Page, signed with that app's secret). One app serves both ch
 If a reply fails because the connection is broken (expired token, missing permission, Instagram
 message access off), the integration is flagged `status = 'error'` with the reason in
 `config.error`; incoming DMs are still stored and the merchant reconnects to clear it.
+
+Refused deliveries show in the employee's **Activity** tab (`inbound_rejected`, at most once per
+10 minutes per channel and reason): `no_app_secret` — no App Secret is saved for that channel;
+`signature_mismatch` — the saved App Secret is not the one of the app sending the webhooks. Only
+channels with DM credentials (Page token + Page / Instagram ids) take part; deliveries for a
+channel connected only for publishing (Instagram OAuth) are acknowledged and ignored.
 
 ### 7.3 AI employee: WhatsApp, Slack, Telegram, SMS
 
