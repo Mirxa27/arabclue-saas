@@ -3,7 +3,7 @@
  * aborts a replacement when the old number cannot be released, and never leaves a
  * reservation (or an unrecorded paid number) behind on failure.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createFakeSupabase, jsonRequest, type FakeHandler, type FakeRpcHandler, type FakeSupabase } from "../helpers/fake-supabase";
 import type { Merchant } from "@/lib/types/database";
 
@@ -61,6 +61,13 @@ const reservationCleared = () =>
 
 beforeEach(() => {
   h.twilio = TWILIO;
+  process.env.VOICE_BRIDGE_WS_URL = "wss://bridge.arabclue.test/stream";
+  process.env.VOICE_BRIDGE_SECRET = "bridge-secret-0123456789";
+});
+afterEach(() => {
+  delete process.env.VOICE_BRIDGE_WS_URL;
+  delete process.env.VOICE_BRIDGE_SECRET;
+  vi.unstubAllGlobals();
 });
 
 describe("provisionMerchantVoiceNumber", () => {
@@ -142,6 +149,36 @@ describe("provisionMerchantVoiceNumber", () => {
     expect(reservationCleared()).toBe(true);
   });
 
+  it("releases a number bought for a store deleted meanwhile (the save matched no row) — SW-22", async () => {
+    useService(claimed(), (call) =>
+      call.table === "voice_configs" && call.op === "update" && (call.payload as Record<string, unknown>).twilio_incoming_sid === "PN-NEW"
+        ? { data: [] }
+        : undefined
+    );
+    const twilio = ops();
+    await expect(provisionMerchantVoiceNumber(h.service.client, TWILIO, MERCHANT_ID, { replace: false }, twilio)).rejects.toMatchObject({
+      status: 409,
+      code: "merchant_gone"
+    });
+    expect(twilio.release).toHaveBeenCalledWith(TWILIO, "PN-NEW");
+    expect(h.service.writes().some((w) => w.table === "events")).toBe(false);
+  });
+
+  it("queues an unrecorded number for the release cron when Twilio refuses the immediate release", async () => {
+    useService(claimed(), (call) => {
+      if (call.table === "voice_configs" && call.op === "update" && (call.payload as Record<string, unknown>).twilio_incoming_sid === "PN-NEW") {
+        return { data: [] };
+      }
+      if (call.table === "voice_number_releases") return { data: { id: "r1", twilio_sid: "PN-NEW", attempts: 0 } };
+      return undefined;
+    });
+    const twilio = ops({ release: vi.fn(async () => Promise.reject(new Error("Twilio release failed: 503"))) });
+    await expect(provisionMerchantVoiceNumber(h.service.client, TWILIO, MERCHANT_ID, { replace: false }, twilio)).rejects.toMatchObject({ status: 409 });
+    const queued = h.service.writes().find((w) => w.table === "voice_number_releases");
+    expect(queued).toMatchObject({ op: "upsert", options: { onConflict: "twilio_sid" } });
+    expect(queued!.payload).toEqual({ twilio_sid: "PN-NEW", phone_number: "+966500000123", reason: "unrecorded_purchase" });
+  });
+
   it("releases a purchased number that could not be recorded", async () => {
     useService(claimed(), (call) =>
       call.table === "voice_configs" && (call.payload as Record<string, unknown>).twilio_incoming_sid === "PN-NEW"
@@ -182,6 +219,26 @@ describe("POST /api/voice/provision-number", () => {
     h.twilio = null;
     expect((await request()).status).toBe(503);
     expect(h.service.rpcCalls).toHaveLength(0);
+  });
+
+  it("SW-42: refuses (503, coded) before any reservation or purchase when the media bridge is not configured", async () => {
+    h.merchant = base("plus", "00000000-0000-4000-8000-0000000000f5");
+    useService(() => ({ data: { outcome: "claimed", phone_number: null, twilio_incoming_sid: null } }));
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    for (const unset of [["VOICE_BRIDGE_WS_URL"], ["VOICE_BRIDGE_SECRET"]]) {
+      process.env.VOICE_BRIDGE_WS_URL = "wss://bridge.arabclue.test/stream";
+      process.env.VOICE_BRIDGE_SECRET = "bridge-secret-0123456789";
+      for (const k of unset) delete process.env[k];
+      const res = await request();
+      expect(res.status).toBe(503);
+      expect(await res.json()).toMatchObject({ code: "voice_bridge_not_configured" });
+    }
+    // a non-wss stream URL is not a bridge Twilio can use
+    process.env.VOICE_BRIDGE_WS_URL = "http://bridge.arabclue.test/stream";
+    expect((await request()).status).toBe(503);
+    expect(h.service.rpcCalls).toHaveLength(0);
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it("maps a concurrent reservation to 409", async () => {

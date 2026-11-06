@@ -12,6 +12,7 @@
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
+import { DEFAULT_RELEASE_DEPS, releaseVoiceNumberForErasure, type NumberReleaseDeps } from "@/lib/voice/number-release";
 
 type MerchantKeys = {
   id: string;
@@ -105,14 +106,24 @@ function scoped<Q>(query: Q, scope: EventScope): Q {
   return q as unknown as Q;
 }
 
-export type ErasureReport = { eventsDeleted: number; wathqCacheDeleted: number };
+export type ErasureReport = {
+  eventsDeleted: number;
+  wathqCacheDeleted: number;
+  /** SW-22: the store's Twilio number was handed to the release queue (and released, if Twilio answered). */
+  voiceNumber: { queued: boolean; released: boolean };
+};
 
 /** Delete the merchant and everything not covered by `on delete cascade`. */
 export async function eraseMerchantData(
   sb: SupabaseClient,
   merchant: MerchantKeys,
-  opts: { ownerEmail?: string | null } = {}
+  opts: { ownerEmail?: string | null; voiceNumbers?: NumberReleaseDeps } = {}
 ): Promise<ErasureReport> {
+  // SW-22: before anything is deleted, move the store's Twilio number (billed to the platform) into
+  // voice_number_releases — which has no merchant key, so the SID survives the erasure until Twilio
+  // confirms the release (retried by the cron). 409 while a number purchase is in flight.
+  const voiceNumber = await releaseVoiceNumberForErasure(sb, merchant.id, opts.voiceNumbers ?? DEFAULT_RELEASE_DEPS);
+
   // Parked Salla installs authorized by this user (Easy Mode, never claimed) carry their email.
   const ownerEmail = opts.ownerEmail?.trim().toLowerCase();
   if (ownerEmail) {
@@ -136,14 +147,14 @@ export async function eraseMerchantData(
     wathqCacheDeleted = count ?? 0;
   }
 
-  // Cascades to brand kits, invoices, products, social, voice, bookings, SEO,
-  // billing payments, agent settings and every ai_employee_* table. The store link
+  // Cascades to brand kits, invoices, products, social, voice (config, call log, escalations),
+  // bookings, SEO, billing payments, agent settings and every ai_employee_* table. The store link
   // history keeps its periods without the merchant id (other merchants' windows).
   // Support tickets / feedback go with the auth user (delete-account deletes it).
   const { error: merchantErr } = await sb.from("merchants").delete().eq("id", merchant.id);
   if (merchantErr) throw new Error(`erase merchant: ${merchantErr.message}`);
 
-  return { eventsDeleted, wathqCacheDeleted };
+  return { eventsDeleted, wathqCacheDeleted, voiceNumber };
 }
 
 export type MerchantExport = Record<string, unknown> & { truncated: string[] };
@@ -184,7 +195,9 @@ export async function buildMerchantExport(sb: SupabaseClient, merchant: Merchant
     agentSettings,
     supportTickets,
     userFeedback,
-    sallaStoreLinks
+    sallaStoreLinks,
+    voiceCalls,
+    voiceEscalations
   ] =
     await Promise.all([
       all("invoices", (f, t) => sb.from("invoices").select("*").eq("merchant_id", id).order("created_at").range(f, t)),
@@ -205,7 +218,11 @@ export async function buildMerchantExport(sb: SupabaseClient, merchant: Merchant
       all("user_feedback", (f, t) => byOwner("user_feedback").order("created_at").range(f, t)),
       all("salla_store_links", (f, t) =>
         sb.from("salla_store_links").select("salla_merchant_id, linked_at, unlinked_at").eq("merchant_id", id).order("linked_at").range(f, t)
-      )
+      ),
+      all("voice_calls", (f, t) =>
+        sb.from("voice_calls").select("call_sid, caller_number, outcome, decline_reason, created_at").eq("merchant_id", id).order("created_at").range(f, t)
+      ),
+      all("voice_escalations", (f, t) => sb.from("voice_escalations").select("*").eq("merchant_id", id).order("created_at").range(f, t))
     ]);
 
   const employeeIds = employees.map((e) => e.id);
@@ -262,6 +279,8 @@ export async function buildMerchantExport(sb: SupabaseClient, merchant: Merchant
     },
     brandKit: brandKit.data,
     voiceConfig: voiceConfig.data,
+    voiceCalls,
+    voiceEscalations,
     invoices,
     products,
     socialPlans,

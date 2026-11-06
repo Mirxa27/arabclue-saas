@@ -6,7 +6,9 @@
  *    and enforces a durable daily cap on purchases.
  * 2. On replace, the old number is released FIRST; if Twilio refuses, nothing is bought.
  * 3. The purchased number is recorded and the reservation cleared in one update; if that
- *    write fails the new number is released again so it is not billed unused.
+ *    write fails — or matches no row because the account was deleted meanwhile (SW-22) — the
+ *    new number is released again so it is not billed unused, and queued for the release cron
+ *    (lib/voice/number-release.ts) if Twilio refuses that too.
  * Every failure path clears the reservation so the merchant can retry.
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -36,6 +38,23 @@ export type TwilioNumberOps = {
 };
 
 const DEFAULT_OPS: TwilioNumberOps = { provision: provisionVoiceNumber, release: releaseVoiceNumber };
+
+/** Release a bought-but-unrecorded number now; if Twilio refuses, queue it for the release cron. */
+async function releaseUnrecordedNumber(
+  sb: SupabaseClient,
+  twilio: TwilioConfig,
+  ops: TwilioNumberOps,
+  merchantId: string,
+  purchased: { sid: string; phoneNumber: string }
+): Promise<void> {
+  try {
+    await ops.release(twilio, purchased.sid);
+  } catch (err) {
+    reportError(err, { route: ROUTE, merchantId, extra: { step: "release unrecorded number", sid: purchased.sid } });
+    const { queueUnrecordedPurchase } = await import("@/lib/voice/number-release");
+    await queueUnrecordedPurchase(sb, purchased.sid, purchased.phoneNumber);
+  }
+}
 
 async function clearReservation(sb: SupabaseClient, merchantId: string) {
   const { error } = await sb
@@ -105,21 +124,24 @@ export async function provisionMerchantVoiceNumber(
       throw new HttpError(502, "Twilio could not provision a number. Try again later.", "purchase_failed");
     }
 
-    const { error: saveErr } = await sb
+    const { data: saved, error: saveErr } = await sb
       .from("voice_configs")
       .update({
         phone_number: purchased.phoneNumber,
         twilio_incoming_sid: purchased.sid,
         enabled: true,
         provisioning_started_at: null,
+        entitlement_lost_at: null,
         updated_at: new Date().toISOString()
       })
-      .eq("merchant_id", merchantId);
-    if (saveErr) {
+      .eq("merchant_id", merchantId)
+      .select("merchant_id");
+    // No row matched: the account was deleted while Twilio was selling us the number.
+    const unrecorded = !saveErr && Array.isArray(saved) && saved.length === 0;
+    if (saveErr || unrecorded) {
       // Do not keep paying for a number no call can be routed to.
-      await ops.release(twilio, purchased.sid).catch((err) =>
-        reportError(err, { route: ROUTE, merchantId, extra: { step: "release unrecorded number", sid: purchased.sid } })
-      );
+      await releaseUnrecordedNumber(sb, twilio, ops, merchantId, purchased);
+      if (unrecorded) throw new HttpError(409, "This store no longer exists.", "merchant_gone");
       assertNoDbError(saveErr, "Save provisioned number", { route: ROUTE, merchantId, code: "provisioning_failed" });
     }
 

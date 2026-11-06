@@ -18,6 +18,7 @@ import { runTickQueue } from "@/lib/employees/tick-queue";
 import { pruneWebhookEvents } from "@/lib/webhooks/idempotency";
 import { handleRouteError } from "@/lib/api/route-handler";
 import { reportError } from "@/lib/observability/error-reporter";
+import { runVoiceHousekeeping } from "@/lib/voice/housekeeping";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -70,6 +71,8 @@ async function run(req: NextRequest): Promise<NextResponse> {
     const { data: prunedInstalls, error: pruneInstallsError } = await sb.rpc("prune_salla_installs", { p_older_than_days: 60 });
     if (pruneInstallsError) reportError(new Error(`prune_salla_installs: ${pruneInstallsError.message}`), { route: "cron/employees-tick" });
     else sallaInstallsPruned = typeof prunedInstalls === "number" ? prunedInstalls : 0;
+    // Voice: 30-day retention of voice.* events / call log, lapsed-number release, release retries.
+    const voice = await runVoiceHousekeeping(sb);
 
     return NextResponse.json({
       billing,
@@ -78,6 +81,7 @@ async function run(req: NextRequest): Promise<NextResponse> {
       failed: failed.length,
       webhookClaimsPruned: pruned,
       sallaInstallsPruned,
+      voice,
       results
     });
   } catch (err) {

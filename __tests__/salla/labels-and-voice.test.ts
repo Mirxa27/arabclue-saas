@@ -49,13 +49,17 @@ describe("voice tools use the merchant's Salla connection", () => {
     merchantId: "m-1",
     accessToken: "enc:v1:stale-ciphertext-must-not-be-used",
     persona: { merchantId: "m-1", storeName: "متجر", dialect: "khaliji" },
+    // SW-23: lookups only answer for the caller id Twilio verified
+    callerNumber: "+966557777777",
     recordBooking: async () => "b1",
-    notifyHuman: async () => undefined,
+    recordEscalation: async () => "e1",
     ...extra
   });
 
   it("looks up an order through sallaApiForMerchant (refresh + 401 retry), not ctx.accessToken", async () => {
-    tokens.sallaApiForMerchant.mockResolvedValue({ data: [{ id: 1, reference_id: 41027662, status: { name: "قيد التنفيذ" } }] });
+    tokens.sallaApiForMerchant.mockResolvedValue({
+      data: [{ id: 1, reference_id: 41027662, status: { name: "قيد التنفيذ" }, customer: { mobile: 557777777, mobile_code: "+966" } }]
+    });
     const out = await dispatchVoiceTool({ name: "lookup_order", arguments: { orderNumber: "41027662" } }, ctx());
     expect(tokens.sallaApiForMerchant).toHaveBeenCalledWith("m-1", "/orders?reference_id=41027662");
     expect(out.output).toBe("حالة الطلب: قيد التنفيذ.");

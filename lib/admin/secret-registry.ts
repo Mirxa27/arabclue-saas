@@ -250,7 +250,13 @@ export const SECRET_GROUPS: SecretGroupDef[] = [
         type: "secret",
         hint: "Also verifies X-Twilio-Signature on /api/voice/twilio/inbound — calls are refused while unset"
       },
-      { key: "VOICE_BRIDGE_WS_URL", label: "Realtime media stream URL", required: false, type: "url" }
+      {
+        key: "VOICE_BRIDGE_WS_URL",
+        label: "Realtime media stream URL",
+        required: false,
+        type: "url",
+        hint: "wss:// URL of the media bridge. Required (with the bridge secret) before numbers can be bought or the voice agent switched on; calls are not bridged while unset"
+      }
     ]
   },
   {

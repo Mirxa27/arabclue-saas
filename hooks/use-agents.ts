@@ -14,6 +14,7 @@ import {
   agentToggleErrorMessage,
   agentToggleFailed,
   hydrateAgentState,
+  type AgentStatusApiEntry,
   type AgentStoreState,
   resolveAgentPersona,
 } from "@/lib/agents/store";
@@ -82,7 +83,7 @@ export function useAgents(): UseAgentsReturn {
   }, [fetchAgents]);
 
   const patchAgent = useCallback(
-    async (body: Record<string, unknown>) => {
+    async (body: Record<string, unknown>): Promise<AgentStatusApiEntry | null> => {
       setError(null);
       const res = await fetch("/api/agents/status", {
         method: "PATCH",
@@ -94,6 +95,9 @@ export function useAgents(): UseAgentsReturn {
         // 402 = plan gate: fixed bilingual copy (the API message is English only)
         throw new Error(agentToggleErrorMessage(res.status, errData));
       }
+      // The saved state can differ from the optimistic toggle (voice without a number is "configuring").
+      const data = (await res.json().catch(() => null)) as { agent?: AgentStatusApiEntry } | null;
+      return data?.agent ?? null;
     },
     [],
   );
@@ -106,7 +110,10 @@ export function useAgents(): UseAgentsReturn {
       const nextEnabled = !current.enabled;
       dispatch({ type: "TOGGLE", role });
       try {
-        await patchAgent({ role, enabled: nextEnabled, status: nextEnabled ? "active" : "idle" });
+        const saved = await patchAgent({ role, enabled: nextEnabled, status: nextEnabled ? "active" : "idle" });
+        if (saved?.role === role) {
+          dispatch({ type: "HYDRATE", state: { agents: { ...state.agents, [role]: hydrateAgentState([saved]).agents[role] } } });
+        }
       } catch (e) {
         dispatch(agentToggleFailed(role, nextEnabled, errorText(e)));
       }

@@ -28,8 +28,9 @@ declare
   merchant_update_cols text[] := array[
     'seller_name', 'vat_number', 'cr_number', 'seller_address', 'store_url',
     'dpa_accepted_at', 'dpa_version'];
+  -- 'enabled' is server-only since 20261106006000_voice_agent.sql (SW-8: the plan/kill-switch gate)
   voice_write_cols text[] := array[
-    'merchant_id', 'dialect', 'hours', 'escalation_phone', 'knowledge', 'enabled', 'updated_at'];
+    'merchant_id', 'dialect', 'hours', 'escalation_phone', 'knowledge', 'updated_at'];
   employee_update_cols text[] := array[
     'display_name', 'avatar', 'language', 'tone', 'timezone', 'working_hours', 'knowledge',
     'goals', 'config', 'updated_at'];
