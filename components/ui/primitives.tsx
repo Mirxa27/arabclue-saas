@@ -1,5 +1,9 @@
 import * as React from "react";
 import { cn } from "@/lib/utils";
+import { fieldTextSize } from "@/lib/ui/field-text-size";
+
+// The portaled, scroll-locking sheet lives in its own client module.
+export { Sheet, type SheetProps } from "@/components/ui/sheet";
 
 // ─── Card ──────────────────────────────────────────────
 type CardVariant = "glass" | "elevated" | "flat" | "interactive";
@@ -92,7 +96,8 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(
         <input
           ref={ref}
           className={cn(
-            "w-full bg-paper/45 backdrop-blur-sm border border-rule/70 px-4 py-3 text-sm rounded-xl",
+            "w-full bg-paper/45 backdrop-blur-sm border border-rule/70 px-4 py-3 rounded-xl",
+            fieldTextSize(className),
             "focus:outline-none focus:bg-paper/75 focus:border-accent/40 focus:ring-2 focus:ring-accent/15 transition-[background-color,border-color,box-shadow] duration-300",
             "placeholder:text-ink-mute disabled:opacity-50 disabled:cursor-not-allowed selection:bg-accent selection:text-paper",
             icon && "pl-10",
@@ -126,7 +131,8 @@ export const Textarea = React.forwardRef<HTMLTextAreaElement, React.TextareaHTML
     <textarea
       ref={ref}
       className={cn(
-        "w-full bg-paper/45 backdrop-blur-sm border border-rule/70 px-4 py-3 text-sm rounded-xl",
+        "w-full bg-paper/45 backdrop-blur-sm border border-rule/70 px-4 py-3 rounded-xl",
+        fieldTextSize(className),
         "focus:outline-none focus:bg-paper/75 focus:border-accent/40 focus:ring-2 focus:ring-accent/15 transition-[background-color,border-color,box-shadow] duration-300 resize-y",
         "placeholder:text-ink-mute disabled:opacity-50 disabled:cursor-not-allowed selection:bg-accent selection:text-paper",
         className
@@ -366,64 +372,6 @@ export function DropdownItem({
   );
 }
 
-// ─── Sheet / Drawer ────────────────────────────────────
-interface SheetProps {
-  open: boolean;
-  onClose: () => void;
-  side?: "left" | "right";
-  title?: string;
-  children: React.ReactNode;
-}
-
-export function Sheet({ open, onClose, side = "right", title, children }: SheetProps) {
-  React.useEffect(() => {
-    if (open) {
-      document.body.style.overflow = "hidden";
-    } else {
-      document.body.style.overflow = "";
-    }
-    return () => { document.body.style.overflow = ""; };
-  }, [open]);
-
-  if (!open) return null;
-
-  return (
-    <div className="fixed inset-0 z-50">
-      {/* Backdrop */}
-      <div
-        className="absolute inset-0 bg-ink/20 backdrop-blur-xs"
-        onClick={onClose}
-        aria-hidden="true"
-      />
-      {/* Panel */}
-      <div
-        className={cn(
-          "absolute top-0 bottom-0 w-full max-w-md bg-paper/90 backdrop-blur-xl border-rule/50 shadow-glass-xl overflow-y-auto",
-          side === "right" ? "right-0 border-l animate-slide-in-right rounded-l-3xl" : "left-0 border-r animate-slide-in-left rounded-r-3xl",
-        )}
-        role="dialog"
-        aria-modal="true"
-        aria-label={title}
-      >
-        <div className="sticky top-0 z-10 flex items-center justify-between p-5 bg-paper/80 backdrop-blur-md border-b border-rule/30">
-          <h2 className="font-display text-xl tracking-crisp">{title}</h2>
-          <button
-            type="button"
-            onClick={onClose}
-            className="p-2 rounded-xl hover:bg-paper-deep/50 transition-colors touch-target"
-            aria-label="Close"
-          >
-            <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-              <path d="M4.5 4.5l9 9M13.5 4.5l-9 9"/>
-            </svg>
-          </button>
-        </div>
-        <div className="p-5">{children}</div>
-      </div>
-    </div>
-  );
-}
-
 // ─── Skeleton ──────────────────────────────────────────
 export function Skeleton({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
   return (
@@ -463,6 +411,9 @@ export function Tooltip({ content, children }: { content: string; children: Reac
 }
 
 // ─── Toast Container ───────────────────────────────────
+// @deprecated — unused legacy toast. The app's toasts are components/ui/toast.tsx
+// (`ToastProvider` in app/layout.tsx, `useToast().toast(message, tone)`), which is
+// positioned clear of the mobile tab bar and the safe areas. Do not mount this one.
 type ToastType = "success" | "error" | "info";
 
 interface Toast {

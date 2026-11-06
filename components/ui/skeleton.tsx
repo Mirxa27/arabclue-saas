@@ -15,7 +15,7 @@ export function GlassCardSkeleton({ className }: { className?: string }) {
   return (
     <div
       className={cn(
-        "rounded-2xl border border-rule/15 bg-glass backdrop-blur-glass p-5 space-y-4",
+        "rounded-2xl border border-rule/15 bg-surface backdrop-blur-glass p-5 space-y-4",
         className
       )}
       aria-hidden
@@ -59,12 +59,12 @@ export function PageSkeleton({ title }: { title: string }) {
       {/* Content area */}
       <div className="grid gap-6 lg:grid-cols-3">
         <div className="lg:col-span-2 space-y-4">
-          <div className="rounded-2xl border border-rule/15 bg-glass backdrop-blur-glass p-5">
+          <div className="rounded-2xl border border-rule/15 bg-surface backdrop-blur-glass p-5">
             <Skeleton className="h-48 w-full" />
           </div>
         </div>
         <div className="space-y-4">
-          <div className="rounded-2xl border border-rule/15 bg-glass backdrop-blur-glass p-5 space-y-3">
+          <div className="rounded-2xl border border-rule/15 bg-surface backdrop-blur-glass p-5 space-y-3">
             <Skeleton className="h-4 w-20" />
             <Skeleton className="h-8 w-full" />
             <Skeleton className="h-8 w-full" />

@@ -106,8 +106,15 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   return (
     <ToastContext.Provider value={{ toast }}>
       {children}
+      {/*
+        TOAST-01: below lg the stack spans the width at the top (inside the safe areas), clear
+        of the tab bar, the floating launchers and the iOS keyboard; from lg (where the tab bar
+        is gone) it sits bottom-right. The old `w-full` + `end-4` overflowed the start edge on
+        phones and `mb-safe` was never defined.
+      */}
       <div
-        className="fixed bottom-20 md:bottom-4 end-4 z-[100] mb-safe flex flex-col gap-2 max-w-sm w-full pointer-events-none px-4 md:px-0"
+        data-testid="toast-region"
+        className="pointer-events-none fixed left-[max(1rem,var(--safe-left))] right-[max(1rem,var(--safe-right))] top-[max(1rem,var(--safe-top))] z-[100] flex flex-col gap-2 lg:bottom-4 lg:left-auto lg:right-4 lg:top-auto lg:w-full lg:max-w-sm"
         aria-live="polite"
         aria-relevant="additions"
       >
@@ -119,7 +126,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
                 toneStyles[item.tone]
               )}
             >
-              <span className="flex-1 leading-snug">{item.message}</span>
+              <span className="min-w-0 flex-1 break-words leading-snug" dir="auto">{item.message}</span>
               <button
                 type="button"
                 onClick={() => dismiss(item.id)}

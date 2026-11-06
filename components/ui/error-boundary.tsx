@@ -39,7 +39,7 @@ export class ErrorBoundary extends Component<Props, State> {
       return (
         <div
           role="alert"
-          className="flex flex-col items-center justify-center min-h-[50vh] px-6 text-center gap-5 bg-backdrop"
+          className="flex flex-col items-center justify-center min-h-[50vh] px-6 text-center gap-5"
         >
           <span className="w-14 h-14 rounded-2xl bg-accent-warm/10 border border-accent-warm/20 flex items-center justify-center">
             <AlertTriangle size={28} className="text-accent-warm" />
