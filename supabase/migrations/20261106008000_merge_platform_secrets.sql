@@ -20,5 +20,5 @@ as $$
         updated_at = now();
 $$;
 
-revoke all on function public.merge_platform_secrets(jsonb, text[]) from public, anon, authenticated;
+revoke execute on function public.merge_platform_secrets(jsonb, text[]) from public, anon, authenticated;
 grant execute on function public.merge_platform_secrets(jsonb, text[]) to service_role;
