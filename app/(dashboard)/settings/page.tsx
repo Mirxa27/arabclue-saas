@@ -317,6 +317,12 @@ export default function SettingsPage() {
                 This permanently deletes your merchant profile, invoices, social posts, and auth account. Type{" "}
                 <strong className="text-ink font-semibold">{deleteTargetName || "your store name"}</strong> to confirm.
               </p>
+              <p className="mt-2 text-sm text-ink-mute leading-relaxed">
+                Export your data first: as the taxpayer you must keep your tax invoices for the period Saudi law requires.
+              </p>
+              <p dir="rtl" className="ar mt-1 text-sm text-ink-mute leading-relaxed">
+                صدّر بياناتك أولاً: بصفتك المكلّف، يجب الاحتفاظ بفواتيرك الضريبية للمدة التي يحددها النظام.
+              </p>
 
               <div className="mt-5">
                 <Field label="Store name">
