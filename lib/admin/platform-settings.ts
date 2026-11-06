@@ -1,4 +1,5 @@
 import { getServiceSupabase } from "@/lib/db/supabase";
+import { reportError } from "@/lib/observability/error-reporter";
 import type { AgentSettings, FeatureSettings } from "@/lib/admin/types";
 
 const DEFAULT_AGENTS: AgentSettings = {
@@ -22,7 +23,10 @@ export async function getPlatformSetting<T>(key: string, fallback: T): Promise<T
     if (error) throw new Error(error.message);
     if (!data?.value) return fallback;
     return { ...fallback, ...(data.value as object) } as T;
-  } catch {
+  } catch (err) {
+    // Runtime gates keep working on defaults during a transient outage, but the
+    // failure is no longer silent.
+    reportError(err, { extra: { platformSetting: key } });
     return fallback;
   }
 }
@@ -47,21 +51,24 @@ export async function updatePlatformSetting(key: string, value: Record<string, u
   if (error) throw new Error(error.message);
 }
 
-export async function getAllPlatformSettings() {
-  try {
-    const supabase = getServiceSupabase();
-    const { data, error } = await supabase.from("platform_settings").select("key, value, updated_at");
-    if (error?.code === "42P01") {
-      return { agents: DEFAULT_AGENTS, features: DEFAULT_FEATURES, updatedAt: null };
-    }
-    if (error) throw new Error(error.message);
-    const map = Object.fromEntries((data ?? []).map((r) => [r.key, r.value]));
-    return {
-      agents: { ...DEFAULT_AGENTS, ...(map.agents as object) } as AgentSettings,
-      features: { ...DEFAULT_FEATURES, ...(map.features as object) } as FeatureSettings,
-      updatedAt: data?.find((r) => r.key === "agents")?.updated_at ?? null
-    };
-  } catch {
+export type AllPlatformSettings = { agents: AgentSettings; features: FeatureSettings; updatedAt: string | null };
+
+/**
+ * Settings for the admin editor. Read errors propagate (only a missing table
+ * falls back to defaults): showing all-enabled defaults after a failed read,
+ * which the editor then saves back, would silently reset every kill switch.
+ */
+export async function getAllPlatformSettings(): Promise<AllPlatformSettings> {
+  const supabase = getServiceSupabase();
+  const { data, error } = await supabase.from("platform_settings").select("key, value, updated_at");
+  if (error?.code === "42P01") {
     return { agents: DEFAULT_AGENTS, features: DEFAULT_FEATURES, updatedAt: null };
   }
+  if (error) throw new Error(`platform_settings read failed: ${error.message}`);
+  const map = Object.fromEntries((data ?? []).map((r) => [r.key, r.value]));
+  return {
+    agents: { ...DEFAULT_AGENTS, ...(map.agents as object) } as AgentSettings,
+    features: { ...DEFAULT_FEATURES, ...(map.features as object) } as FeatureSettings,
+    updatedAt: data?.find((r) => r.key === "agents")?.updated_at ?? null
+  };
 }

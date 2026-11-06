@@ -16,34 +16,69 @@ type MerchantRow = {
   socialPlatforms: string[];
 };
 
+const PAGE_SIZE = 50;
+
 export function AdminMerchantsClient() {
   const { toast } = useToast();
   const [merchants, setMerchants] = useState<MerchantRow[]>([]);
+  const [total, setTotal] = useState(0);
+  const [offset, setOffset] = useState(0);
+  const [query, setQuery] = useState("");
+  const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     (async () => {
+      setLoading(true);
       try {
-        const res = await apiFetch<{ merchants: MerchantRow[] }>("/api/admin/merchants");
+        const qs = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(offset) });
+        if (search) qs.set("q", search);
+        const res = await apiFetch<{ merchants: MerchantRow[]; total: number }>(`/api/admin/merchants?${qs}`);
         setMerchants(res.merchants);
+        setTotal(res.total);
       } catch (err) {
         toast(err instanceof ApiClientError ? err.message : "Failed to load merchants", "error");
       } finally {
         setLoading(false);
       }
     })();
-  }, [toast]);
+  }, [toast, offset, search]);
 
-  if (loading) return <p className="p-4 md:p-8 pb-24 lg:pb-8 text-sm text-ink-mute">Loading merchants…</p>;
+  const from = total === 0 ? 0 : offset + 1;
+  const to = offset + merchants.length;
 
   return (
     <div className="p-4 md:p-8 pb-24 lg:pb-8 overflow-y-auto">
       <Card>
         <CardHeader>
-          <CardTitle>Merchants ({merchants.length})</CardTitle>
+          <CardTitle>
+            Merchants ({from}–{to} of {total})
+          </CardTitle>
         </CardHeader>
-        {merchants.length === 0 ? (
-          <p className="text-sm text-ink-mute">No merchants registered yet.</p>
+        <form
+          className="mb-4 flex flex-wrap gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            setOffset(0);
+            setSearch(query.trim());
+          }}
+        >
+          <input
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search store name or merchant id"
+            className="min-w-[220px] flex-1 rounded-xl border border-rule bg-paper px-3 py-2 text-sm"
+            aria-label="Search merchants"
+          />
+          <button type="submit" className="rounded-xl border border-rule px-3 py-2 text-sm">
+            Search
+          </button>
+        </form>
+        {loading ? (
+          <p className="text-sm text-ink-mute">Loading merchants…</p>
+        ) : merchants.length === 0 ? (
+          <p className="text-sm text-ink-mute">{search ? "No merchants match this search." : "No merchants registered yet."}</p>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -91,6 +126,29 @@ export function AdminMerchantsClient() {
                 ))}
               </tbody>
             </table>
+          </div>
+        )}
+        {total > PAGE_SIZE && (
+          <div className="mt-4 flex items-center justify-between text-sm">
+            <button
+              type="button"
+              className="rounded-xl border border-rule px-3 py-2 disabled:opacity-40"
+              disabled={offset === 0 || loading}
+              onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}
+            >
+              Previous
+            </button>
+            <span className="text-ink-mute">
+              Page {Math.floor(offset / PAGE_SIZE) + 1} of {Math.ceil(total / PAGE_SIZE)}
+            </span>
+            <button
+              type="button"
+              className="rounded-xl border border-rule px-3 py-2 disabled:opacity-40"
+              disabled={offset + PAGE_SIZE >= total || loading}
+              onClick={() => setOffset(offset + PAGE_SIZE)}
+            >
+              Next
+            </button>
           </div>
         )}
       </Card>

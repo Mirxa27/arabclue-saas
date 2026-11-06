@@ -29,11 +29,23 @@ export async function getPlatformStats() {
     supabase.from("social_channels").select("id", { count: "exact", head: true })
   ]);
 
-  const { data: planRows } = await supabase.from("merchants").select("plan");
+  for (const [name, res] of Object.entries({ merchants, invoices, socialPosts, socialFailed, events, escalations, billing, channels })) {
+    if (res.error) throw new Error(`admin stats (${name}): ${res.error.message}`);
+  }
+
+  // Exact plan mix grouped in SQL (no PostgREST row cap); only active/past_due
+  // subscriptions count as paid, everything else is reported as unpaid.
+  const { data: mix, error: mixError } = await supabase.rpc("admin_plan_mix");
+  if (mixError) throw new Error(`admin stats (plan mix): ${mixError.message}`);
   const planCounts: Record<string, number> = {};
-  for (const row of planRows ?? []) {
-    const p = row.plan ?? "lite";
-    planCounts[p] = (planCounts[p] ?? 0) + 1;
+  let unpaidMerchants = 0;
+  for (const row of (mix ?? []) as Array<{ plan: string; subscription_status: string; merchants: number }>) {
+    const count = Number(row.merchants);
+    if (row.subscription_status === "active" || row.subscription_status === "past_due") {
+      planCounts[row.plan] = (planCounts[row.plan] ?? 0) + count;
+    } else {
+      unpaidMerchants += count;
+    }
   }
 
   return {
@@ -45,41 +57,67 @@ export async function getPlatformStats() {
     escalations: escalations.count ?? 0,
     billingPayments: billing.count ?? 0,
     socialChannels: channels.count ?? 0,
-    planCounts
+    planCounts,
+    unpaidMerchants
   };
 }
 
-export async function listMerchantsAdmin(limit = 50) {
+export type MerchantsAdminQuery = { limit?: number; offset?: number; q?: string };
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Escape LIKE wildcards so the search term is matched literally. */
+function escapeLike(term: string): string {
+  return term.replace(/[\\%_]/g, (c) => `\\${c}`);
+}
+
+/** Paginated, searchable merchant list (#37 — previously a silent 50-row cap). */
+export async function listMerchantsAdmin(query: MerchantsAdminQuery = {}) {
+  const limit = Math.min(Math.max(Math.trunc(query.limit ?? 50) || 50, 1), 100);
+  const offset = Math.max(Math.trunc(query.offset ?? 0) || 0, 0);
+  const q = query.q?.trim() ?? "";
   const supabase = getServiceSupabase();
-  const { data: merchants, error } = await supabase
+
+  let builder = supabase
     .from("merchants")
-    .select("id, seller_name, plan, subscription_status, installed_at, access_token, owner_user_id")
-    .order("installed_at", { ascending: false })
-    .limit(limit);
+    .select("id, seller_name, plan, subscription_status, installed_at, access_token, owner_user_id", { count: "exact" })
+    .order("installed_at", { ascending: false, nullsFirst: false })
+    .order("id", { ascending: true })
+    .range(offset, offset + limit - 1);
+  if (q) builder = UUID_RE.test(q) ? builder.eq("id", q) : builder.ilike("seller_name", `%${escapeLike(q)}%`);
+
+  const { data: merchants, error, count } = await builder;
   if (error) throw new Error(error.message);
 
   const ids = (merchants ?? []).map((m) => m.id);
-  const { data: channelRows } = await supabase
-    .from("social_channels")
-    .select("merchant_id, platform")
-    .in("merchant_id", ids.length ? ids : ["00000000-0000-4000-8000-000000000000"]);
-
   const channelsByMerchant = new Map<string, string[]>();
-  for (const row of channelRows ?? []) {
-    const list = channelsByMerchant.get(row.merchant_id) ?? [];
-    list.push(row.platform);
-    channelsByMerchant.set(row.merchant_id, list);
+  if (ids.length) {
+    const { data: channelRows, error: channelError } = await supabase
+      .from("social_channels")
+      .select("merchant_id, platform")
+      .in("merchant_id", ids);
+    if (channelError) throw new Error(channelError.message);
+    for (const row of channelRows ?? []) {
+      const list = channelsByMerchant.get(row.merchant_id) ?? [];
+      list.push(row.platform);
+      channelsByMerchant.set(row.merchant_id, list);
+    }
   }
 
-  return (merchants ?? []).map((m) => ({
-    id: m.id,
-    sellerName: m.seller_name,
-    plan: m.plan,
-    subscriptionStatus: m.subscription_status,
-    installedAt: m.installed_at,
-    sallaConnected: Boolean(m.access_token),
-    socialPlatforms: channelsByMerchant.get(m.id) ?? []
-  }));
+  return {
+    merchants: (merchants ?? []).map((m) => ({
+      id: m.id,
+      sellerName: m.seller_name,
+      plan: m.plan,
+      subscriptionStatus: m.subscription_status,
+      installedAt: m.installed_at,
+      sallaConnected: Boolean(m.access_token),
+      socialPlatforms: channelsByMerchant.get(m.id) ?? []
+    })),
+    total: count ?? 0,
+    limit,
+    offset
+  };
 }
 
 export async function listEventsAdmin(limit = 40) {

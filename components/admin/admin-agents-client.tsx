@@ -22,20 +22,25 @@ export function AdminAgentsClient() {
   const [features, setFeatures] = useState<FeatureSettings | null>(null);
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     (async () => {
+      setLoading(true);
+      setLoadError(null);
       try {
         const res = await apiFetch<SettingsResponse>("/api/admin/config");
         setAgents(res.settings.agents);
         setFeatures(res.settings.features);
       } catch (err) {
-        toast(err instanceof ApiClientError ? err.message : "Failed to load agents", "error");
+        // Never fall back to defaults here: saving them would reset the kill switches.
+        setLoadError(err instanceof ApiClientError ? err.message : "Failed to load agent settings");
       } finally {
         setLoading(false);
       }
     })();
-  }, [toast]);
+  }, [attempt]);
 
   async function save() {
     if (!agents || !features) return;
@@ -51,6 +56,18 @@ export function AdminAgentsClient() {
     } finally {
       setSaving(false);
     }
+  }
+
+  if (loadError) {
+    return (
+      <div className="p-4 md:p-8 pb-24 lg:pb-8 text-sm" role="alert">
+        <p className="text-danger">Could not load the current agent settings: {loadError}</p>
+        <p className="mt-1 text-ink-mute">Nothing was changed. Editing is disabled until the settings load.</p>
+        <Button type="button" variant="outline" size="sm" className="mt-3" onClick={() => setAttempt((n) => n + 1)}>
+          Retry
+        </Button>
+      </div>
+    );
   }
 
   if (loading || !agents || !features) {

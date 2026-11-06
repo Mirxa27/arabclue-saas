@@ -15,7 +15,10 @@ type Stats = {
   escalations: number;
   billingPayments: number;
   socialChannels: number;
+  /** Paying merchants (active / past_due) by plan. */
   planCounts: Record<string, number>;
+  /** Signed up but not paying (pending / canceled). */
+  unpaidMerchants: number;
 };
 
 export function AdminOverviewClient() {
@@ -82,6 +85,7 @@ export function AdminOverviewClient() {
       <Card>
         <CardHeader>
           <CardTitle>Plans</CardTitle>
+          <CardSubtitle>Paying merchants (active or past due) by plan</CardSubtitle>
         </CardHeader>
         <div className="flex flex-wrap gap-2">
           {Object.entries(stats.planCounts).map(([plan, count]) => (
@@ -89,9 +93,7 @@ export function AdminOverviewClient() {
               {plan}: {count}
             </Badge>
           ))}
-          {Object.keys(stats.planCounts).length === 0 && (
-            <p className="text-sm text-ink-mute">No merchants yet.</p>
-          )}
+          <Badge tone="default">unpaid / pending: {stats.unpaidMerchants}</Badge>
         </div>
       </Card>
     </div>

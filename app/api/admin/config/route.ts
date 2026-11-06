@@ -23,7 +23,7 @@ export async function GET() {
       managedKeys: MANAGED_SECRET_KEYS
     });
   } catch (err) {
-    return handleRouteError(err);
+    return handleRouteError(err, { route: "GET /api/admin/config" });
   }
 }
 
@@ -70,18 +70,22 @@ export async function PATCH(req: NextRequest) {
   try {
     await requirePlatformAdminApi();
     const body = PatchSchema.parse(await req.json());
+    // Throws on a failed read, so nothing is written on top of unknown state.
     const current = await getAllPlatformSettings();
+    const next = { ...current };
 
     if (body.agents) {
-      await updatePlatformSetting("agents", {
+      next.agents = {
         ...current.agents,
         social: { ...current.agents.social, ...body.agents.social },
         voice: { ...current.agents.voice, ...body.agents.voice },
         seo: { ...current.agents.seo, ...body.agents.seo }
-      });
+      };
+      await updatePlatformSetting("agents", next.agents);
     }
     if (body.features) {
-      await updatePlatformSetting("features", { ...current.features, ...body.features });
+      next.features = { ...current.features, ...body.features };
+      await updatePlatformSetting("features", next.features);
     }
 
     let secretsResult: { updated: string[]; skipped: string[] } | undefined;
@@ -94,12 +98,13 @@ export async function PATCH(req: NextRequest) {
     const groups = getPlatformConfigGroups();
     return NextResponse.json({
       ok: true,
-      settings: await getAllPlatformSettings(),
+      // The values just written (a re-read could fail after a successful write).
+      settings: next,
       secrets: secretsResult,
       groups,
       health: configHealthSummary(groups)
     });
   } catch (err) {
-    return handleRouteError(err);
+    return handleRouteError(err, { route: "PATCH /api/admin/config" });
   }
 }

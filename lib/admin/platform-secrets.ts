@@ -101,8 +101,8 @@ export async function loadDecryptedSecrets(): Promise<Record<string, string>> {
 export async function savePlatformSecrets(
   updates: Record<string, string | null | undefined>
 ): Promise<{ updated: string[]; skipped: string[] }> {
-  // Must not fall back to {} on a failed read: the upsert below would erase every other secret.
-  const current = await readEncryptedSecrets();
+  const set: Record<string, string> = {};
+  const remove: string[] = [];
   const updated: string[] = [];
   const skipped: string[] = [];
 
@@ -117,21 +117,24 @@ export async function savePlatformSecrets(
     }
     if (value === undefined) continue;
     if (value === null || value === "") {
-      delete current[key];
+      remove.push(key);
       updated.push(key);
       continue;
     }
-    current[key] = encryptSecret(value.trim());
+    set[key] = encryptSecret(value.trim());
     updated.push(key);
   }
+  if (updated.length === 0) return { updated, skipped };
 
+  // One atomic statement (merge_platform_secrets): concurrent saves of different
+  // keys can no longer overwrite each other, and a failed write changes nothing.
   const supabase = getServiceSupabase();
-  const { error } = await supabase.from("platform_settings").upsert(
-    { key: SETTINGS_KEY, value: current, updated_at: new Date().toISOString() },
-    { onConflict: "key" }
-  );
+  const { error } = await supabase.rpc("merge_platform_secrets", { p_set: set, p_remove: remove });
   if (error?.code === "42P01") {
     throw new Error("platform_settings table missing — run migration 0005_platform_settings.sql");
+  }
+  if (error?.code === "PGRST202" || error?.code === "42883") {
+    throw new Error("merge_platform_secrets() missing — run migration 20261106008000_merge_platform_secrets.sql");
   }
   if (error) throw new Error(error.message);
 
