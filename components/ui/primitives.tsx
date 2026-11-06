@@ -4,6 +4,9 @@ import { fieldTextSize } from "@/lib/ui/field-text-size";
 
 // The portaled, scroll-locking sheet lives in its own client module.
 export { Sheet, type SheetProps } from "@/components/ui/sheet";
+// Interactive pieces (hooks / handlers) live in a client module, so Server Components can keep
+// importing everything from here. Toasts: components/ui/toast.tsx (`useToast().toast(...)`).
+export { Tabs, Dropdown, DropdownItem, Tooltip } from "@/components/ui/interactive";
 
 // ─── Card ──────────────────────────────────────────────
 type CardVariant = "glass" | "elevated" | "flat" | "interactive";
@@ -271,107 +274,6 @@ export function StatCard({ label, value, suffix, progress, progressColor, icon, 
   );
 }
 
-// ─── Tabs ──────────────────────────────────────────────
-interface Tab {
-  id: string;
-  label: string;
-  count?: number;
-}
-
-interface TabsProps {
-  tabs: Tab[];
-  activeTab: string;
-  onChange: (tabId: string) => void;
-}
-
-export function Tabs({ tabs, activeTab, onChange }: TabsProps) {
-  return (
-    <div className="flex gap-1 p-1 bg-paper-deep/40 backdrop-blur-sm rounded-2xl border border-rule/30">
-      {tabs.map((tab) => (
-        <button
-          key={tab.id}
-          type="button"
-          onClick={() => onChange(tab.id)}
-          className={cn(
-            "flex-1 flex items-center justify-center gap-1.5 px-4 py-2.5 text-sm font-medium rounded-xl transition-all duration-300 touch-target",
-            activeTab === tab.id
-              ? "bg-paper shadow-glass-sm text-ink"
-              : "text-ink-mute hover:text-ink-soft hover:bg-paper/30"
-          )}
-        >
-          {tab.label}
-          {tab.count !== undefined && (
-            <span className={cn(
-              "text-[10px] font-mono px-1.5 py-0.5 rounded-full",
-              activeTab === tab.id ? "bg-accent/10 text-accent" : "bg-rule/50 text-ink-mute"
-            )}>
-              {tab.count}
-            </span>
-          )}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-// ─── Dropdown Menu ─────────────────────────────────────
-interface DropdownProps {
-  trigger: React.ReactNode;
-  children: React.ReactNode;
-  align?: "left" | "right";
-}
-
-export function Dropdown({ trigger, children, align = "left" }: DropdownProps) {
-  const [open, setOpen] = React.useState(false);
-  const ref = React.useRef<HTMLDivElement>(null);
-
-  React.useEffect(() => {
-    function handleClickOutside(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    }
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, []);
-
-  return (
-    <div ref={ref} className="relative inline-block">
-      <div onClick={() => setOpen(!open)} className="cursor-pointer touch-target flex items-center">
-        {trigger}
-      </div>
-      {open && (
-        <div
-          className={cn(
-            "absolute top-full mt-2 min-w-[180px] bg-paper/85 backdrop-blur-xl border border-rule/50 rounded-2xl shadow-glass-lg p-1.5 z-50 animate-scale-in origin-top",
-            align === "right" ? "right-0" : "left-0"
-          )}
-        >
-          {children}
-        </div>
-      )}
-    </div>
-  );
-}
-
-export function DropdownItem({
-  className,
-  danger,
-  ...props
-}: React.ButtonHTMLAttributes<HTMLButtonElement> & { danger?: boolean }) {
-  return (
-    <button
-      type="button"
-      className={cn(
-        "w-full text-left px-3 py-2.5 text-sm rounded-xl transition-all duration-200 font-medium",
-        danger
-          ? "text-accent-warm hover:bg-accent-warm/10"
-          : "text-ink-soft hover:bg-paper-deep/50 hover:text-ink",
-        className
-      )}
-      {...props}
-    />
-  );
-}
-
 // ─── Skeleton ──────────────────────────────────────────
 export function Skeleton({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
   return (
@@ -384,97 +286,5 @@ export function Skeleton({ className, ...props }: React.HTMLAttributes<HTMLDivEl
     >
       <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent bg-[length:200%_100%] animate-shimmer" />
     </div>
-  );
-}
-
-// ─── Tooltip ───────────────────────────────────────────
-export function Tooltip({ content, children }: { content: string; children: React.ReactNode }) {
-  const [show, setShow] = React.useState(false);
-  
-  return (
-    <div
-      className="relative inline-block"
-      onMouseEnter={() => setShow(true)}
-      onMouseLeave={() => setShow(false)}
-      onFocus={() => setShow(true)}
-      onBlur={() => setShow(false)}
-    >
-      {children}
-      {show && (
-        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-1.5 bg-ink text-paper text-xs rounded-lg whitespace-nowrap z-50 animate-scale-in">
-          {content}
-          <div className="absolute top-full left-1/2 -translate-x-1/2 -mt-1 w-2 h-2 rotate-45 bg-ink" />
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ─── Toast Container ───────────────────────────────────
-// @deprecated — unused legacy toast. The app's toasts are components/ui/toast.tsx
-// (`ToastProvider` in app/layout.tsx, `useToast().toast(message, tone)`), which is
-// positioned clear of the mobile tab bar and the safe areas. Do not mount this one.
-type ToastType = "success" | "error" | "info";
-
-interface Toast {
-  id: string;
-  type: ToastType;
-  message: string;
-}
-
-const toastContext = React.createContext<{
-  addToast: (type: ToastType, message: string) => void;
-}>({ addToast: () => {} });
-
-export function useToast() {
-  return React.useContext(toastContext);
-}
-
-export function ToastProvider({ children }: { children: React.ReactNode }) {
-  const [toasts, setToasts] = React.useState<Toast[]>([]);
-
-  const addToast = React.useCallback((type: ToastType, message: string) => {
-    const id = crypto.randomUUID();
-    setToasts((prev) => [...prev, { id, type, message }]);
-    setTimeout(() => {
-      setToasts((prev) => prev.filter((t) => t.id !== id));
-    }, 4000);
-  }, []);
-
-  const toastColors: Record<ToastType, string> = {
-    success: "border-accent/30 bg-accent/5",
-    error: "border-accent-warm/30 bg-accent-warm/5",
-    info: "border-rule bg-paper/65",
-  };
-
-  const toastIcons: Record<ToastType, string> = {
-    success: "✓",
-    error: "✕",
-    info: "i",
-  };
-
-  return (
-    <toastContext.Provider value={{ addToast }}>
-      {children}
-      <div className="fixed bottom-4 right-4 z-[100] flex flex-col gap-2 max-w-sm" aria-live="polite">
-        {toasts.map((toast) => (
-          <div
-            key={toast.id}
-            className={cn(
-              "px-4 py-3 rounded-2xl border backdrop-blur-lg shadow-glass-lg animate-scale-in text-sm font-medium flex items-center gap-3",
-              toastColors[toast.type]
-            )}
-          >
-            <span className={cn(
-              "flex-shrink-0 w-5 h-5 rounded-full flex items-center justify-center text-[11px] font-bold",
-              toast.type === "success" ? "bg-accent text-paper" : toast.type === "error" ? "bg-accent-warm text-paper" : "bg-ink text-paper"
-            )}>
-              {toastIcons[toast.type]}
-            </span>
-            {toast.message}
-          </div>
-        ))}
-      </div>
-    </toastContext.Provider>
   );
 }
