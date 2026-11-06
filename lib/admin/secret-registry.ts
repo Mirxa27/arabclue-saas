@@ -58,6 +58,14 @@ export const SECRET_GROUPS: SecretGroupDef[] = [
         type: "secret",
         bootstrap: true
       },
+      {
+        key: "SUPABASE_SECRET_KEY",
+        label: "Supabase secret key (sign-in IP forwarding)",
+        required: false,
+        type: "secret",
+        bootstrap: true,
+        hint: "Optional, hPanel only — sb_secret_… key. Sign-in forwards each visitor's IP so Supabase rate-limits per visitor; also enable Authentication → Rate Limits → IP address forwarding"
+      },
       { key: "CRON_SECRET", label: "Cron / inbound secret", required: true, type: "secret" },
       { key: "OAUTH_STATE_SECRET", label: "OAuth state signing", required: false, type: "secret" },
       {

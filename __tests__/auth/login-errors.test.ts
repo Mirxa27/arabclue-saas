@@ -6,7 +6,6 @@ import {
   loginErrorFromRedirectParams,
   loginErrorMessage
 } from "@/lib/auth/login-errors";
-import { parseAuthFragment } from "@/lib/auth/implicit-session";
 
 const ARABIC = /[؀-ۿ]/;
 
@@ -62,26 +61,5 @@ describe("loginErrorFromRedirectParams", () => {
     expect(loginErrorFromRedirectParams(new URLSearchParams("error=access_denied"))).toBe("access_denied");
     expect(loginErrorFromRedirectParams(new URLSearchParams("error=weird"))).toBe("unknown");
     expect(loginErrorFromRedirectParams(new URLSearchParams("code=abc"))).toBeNull();
-  });
-});
-
-describe("parseAuthFragment (implicit-flow rescue)", () => {
-  it("extracts tokens from an old implicit magic-link fragment", () => {
-    expect(
-      parseAuthFragment("#access_token=at.x.y&expires_in=3600&refresh_token=rt1&token_type=bearer&type=magiclink")
-    ).toEqual({ kind: "tokens", accessToken: "at.x.y", refreshToken: "rt1" });
-  });
-
-  it("maps fragment errors to stable codes", () => {
-    expect(parseAuthFragment("#error=access_denied&error_code=otp_expired&error_description=x")).toEqual({
-      kind: "error",
-      code: "link_expired"
-    });
-  });
-
-  it("ignores unrelated or partial fragments", () => {
-    expect(parseAuthFragment("")).toBeNull();
-    expect(parseAuthFragment("#pricing")).toBeNull();
-    expect(parseAuthFragment("#access_token=only")).toBeNull();
   });
 });

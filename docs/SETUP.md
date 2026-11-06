@@ -35,6 +35,8 @@ cp .env.example .env.local
    - `Project URL` → `NEXT_PUBLIC_SUPABASE_URL`
    - `anon public` → `NEXT_PUBLIC_SUPABASE_ANON_KEY`
    - `service_role` → `SUPABASE_SERVICE_ROLE_KEY` *(server only, never expose)*
+   - optional: a **secret** API key (`sb_secret_…`, **Project Settings → API Keys**) →
+     `SUPABASE_SECRET_KEY` *(server only)* — lets sign-in forward each visitor's IP, see §3.3.
 
 ### 3.2 Run migrations
 
@@ -51,11 +53,14 @@ two routes that turn it into the cookie session and redirect to a validated rela
 
 | Route | Link shape | Works when |
 |---|---|---|
-| `/auth/confirm` | `?token_hash=…&type=email&next=…` (our email template, below) | **any** browser — including the mail app's in-app browser on phones |
+| `/auth/confirm` | `?token_hash=…&type=email&next=…[&redirect_to=…]` (our email templates, below) | **any** browser — including the mail app's in-app browser on phones |
 | `/auth/callback` | `?code=…&next=…` (Supabase's default template, PKCE) | only the browser that requested the link (it holds the PKCE code-verifier cookie) |
 
 Failures (expired / already-used link, link opened in another browser, Supabase `error=` params)
 redirect to `/login?error=<code>`, which shows a fixed Arabic + English message.
+
+`next` is always reduced to a same-origin path (absolute, protocol-relative and dot-segment tricks
+such as `/.//evil.example` fall back to `/dashboard`), and the middleware never redirects off-site.
 
 1. **Authentication → URL Configuration**
    - **Site URL**: `http://localhost:3000` (dev) / `https://arabclue.com` (prod). Must match
@@ -67,9 +72,10 @@ redirect to `/login?error=<code>`, which shows a fixed Arabic + English message.
      The trailing `**` also matches the `?next=…` query the app appends. The old
      `/dashboard` and `/welcome` entries are no longer needed.
 2. **Authentication → Providers → Email**: enabled (Magic Link / email OTP on).
-3. **Authentication → Email Templates** — replace the body of **Magic Link** (existing users)
-   and **Confirm signup** (first sign-in of a new address) so the link goes to `/auth/confirm`
-   with the token hash. Keep `{{ .TokenHash }}` exactly as written.
+3. **Authentication → Email Templates** — replace the body of **Magic Link** (existing users),
+   **Confirm signup** (first sign-in of a new address) and **Invite user** so the link goes to
+   `/auth/confirm` with the token hash. Keep `{{ .TokenHash }}` and `{{ .RedirectTo }}` exactly as
+   written, and keep `redirect_to={{ .RedirectTo }}` the **last** parameter of the Magic Link URL.
 
    **Magic Link** — subject: `رابط الدخول إلى arabclue · Your arabclue sign-in link`
 
@@ -77,17 +83,23 @@ redirect to `/login?error=<code>`, which shows a fixed Arabic + English message.
    <div dir="rtl" lang="ar" style="font-family: Tahoma, Arial, sans-serif">
      <h2>رابط الدخول إلى arabclue</h2>
      <p>اضغط الزر أدناه لتسجيل الدخول. الرابط صالح لمدة ساعة ويُستخدم مرة واحدة.</p>
-     <p><a href="{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=email&next=/dashboard">تسجيل الدخول</a></p>
+     <p><a href="{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=email&next=/dashboard&redirect_to={{ .RedirectTo }}">تسجيل الدخول</a></p>
      <p>إن لم تطلب هذا الرابط فتجاهل هذه الرسالة.</p>
    </div>
    <hr>
    <div dir="ltr" lang="en" style="font-family: Arial, sans-serif">
      <h2>Your arabclue sign-in link</h2>
      <p>Click the button below to sign in. The link is valid for one hour and works once.</p>
-     <p><a href="{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=email&next=/dashboard">Sign in</a></p>
+     <p><a href="{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=email&next=/dashboard&redirect_to={{ .RedirectTo }}">Sign in</a></p>
      <p>If you didn't request this link, you can ignore this email.</p>
    </div>
    ```
+
+   `{{ .RedirectTo }}` is the `/auth/callback?next=…` URL the app sent with the request, so a
+   sign-in started from a deep link or a "Connect LinkedIn" button returns there. `/auth/confirm`
+   only takes `next` from it when it is our own `/auth/callback` URL on the site origin; otherwise
+   (for example the bare Site URL, which Supabase uses for links sent from its dashboard) the
+   template's `next=/dashboard` applies.
 
    **Confirm signup** — subject: `أكّد بريدك في arabclue · Confirm your arabclue email`
 
@@ -107,14 +119,55 @@ redirect to `/login?error=<code>`, which shows a fixed Arabic + English message.
    </div>
    ```
 
+   **Invite user** (invites sent from the Supabase dashboard) — subject:
+   `دعوة للانضمام إلى arabclue · You're invited to arabclue`
+
+   ```html
+   <div dir="rtl" lang="ar" style="font-family: Tahoma, Arial, sans-serif">
+     <h2>دعوة للانضمام إلى arabclue</h2>
+     <p>اضغط الزر أدناه لقبول الدعوة وإنشاء حسابك.</p>
+     <p><a href="{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=invite&next=/welcome">قبول الدعوة</a></p>
+   </div>
+   <hr>
+   <div dir="ltr" lang="en" style="font-family: Arial, sans-serif">
+     <h2>You're invited to arabclue</h2>
+     <p>Click the button below to accept the invitation and create your account.</p>
+     <p><a href="{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=invite&next=/welcome">Accept invitation</a></p>
+   </div>
+   ```
+
    Supabase sends **Confirm signup** the first time an address signs in, so it lands on onboarding
-   (`/welcome`); returning users get **Magic Link** and land on `/dashboard`. `next` in a template
-   must be a relative path — absolute URLs (including `{{ .RedirectTo }}`) are ignored and fall back
-   to `/dashboard`.
+   (`/welcome`); returning users get **Magic Link** and land on the page they started from (or
+   `/dashboard`). A plain `next` in a template must be a relative path.
 
 > Until the templates are changed, Supabase's default template still works through `/auth/callback`,
-> but only in the browser that requested the link. Magic links that were emailed before this change
-> (implicit flow, `#access_token=…`) are finished by `/login` and the landing page via `POST /auth/session`.
+> but only in the browser that requested the link. Links in the old implicit-flow format
+> (`…#access_token=…`, emailed before the PKCE switch or by Supabase's default **Invite** template)
+> are **not** accepted: tokens in a URL fragment are never turned into a session, because anyone can
+> link to `/#access_token=<their own tokens>` and sign a visitor into their account. `/` and `/login`
+> strip such a fragment from the address bar and show "this link format is no longer supported —
+> request a new sign-in link". That is why the Invite template above is required.
+
+4. **Sign-in rate limits.** Every sign-in call reaches Supabase Auth from the app server, so by
+   default Supabase's per-IP limits (`/otp`, `/verify`: 30 requests / 5 min) count all merchants
+   against the server's one address. To make them per visitor:
+   - set `SUPABASE_SECRET_KEY` (`sb_secret_…`; legacy `service_role` JWTs are not accepted for
+     this) in the server env — it is used **only** by the sign-in route handlers;
+   - enable **Authentication → Rate Limits → IP address forwarding** (or Management API
+     `security_sb_forwarded_for_enabled: true`).
+
+   The app then sends the visitor's IP — as resolved by `TRUSTED_PROXY_HOPS`, never the raw
+   `X-Forwarded-For` — as `sb-forwarded-for`. Without the key it uses the anon key and forwards
+   nothing. Independently, the app caps sign-in itself: 20 link requests per client IP and 3 per
+   address (lower-cased, `+tag` and Gmail dots folded) per 15 minutes, and 30 link verifications per
+   client IP per 5 minutes. The project-wide email budget is a Supabase setting: use custom SMTP and
+   size **Rate Limits → emails sent** to your traffic (the built-in mailer allows only a few per hour).
+
+5. **Same-origin check.** `POST /api/auth/otp` only accepts requests whose `Origin` is the site
+   itself: the request origin, `NEXT_PUBLIC_SITE_URL`, or the host the proxy forwarded (`Host` /
+   `X-Forwarded-Host`, so self-hosted `next start` behind Passenger works before
+   `NEXT_PUBLIC_SITE_URL` is set). A rejection returns `code: "cross_site"` and is logged with the
+   origin it saw — if every sign-in fails that way, check the proxy's `Host` forwarding.
 
 Local smoke test (Supabase CLI stack, Mailpit on `:54324`):
 

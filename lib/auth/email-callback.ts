@@ -5,20 +5,26 @@
  *                                                 `emailRedirectTo` from POST /api/auth/otp).
  *                                                 Needs the code-verifier cookie, i.e. the same
  *                                                 browser that requested the link.
- *   GET /auth/confirm?token_hash=…&type=email&next=…
+ *   GET /auth/confirm?token_hash=…&type=email&next=…[&redirect_to={{ .RedirectTo }}]
  *                                                 Token-hash link (our recommended email template).
  *                                                 Works in any browser, incl. mail-app webviews.
  *
  * Both routes accept both shapes. Success → session cookies + redirect to the validated
- * `next` (default /dashboard). Failure → /login?error=<stable code>; never a 500 and never
- * Supabase's own error text.
+ * landing path (default /dashboard). Failure → /login?error=<stable code>; never a 500 and
+ * never Supabase's own error text.
+ *
+ * The landing path is the `next` the sign-in was requested with when the link carries it in
+ * `redirect_to` (our own `${site}/auth/callback?next=…`, see emailRedirectUrl), else the
+ * template's `next`, else /dashboard.
  */
 import type { NextRequest, NextResponse } from "next/server";
 import type { AuthError, EmailOtpType } from "@supabase/supabase-js";
 import { createRouteHandlerSupabase } from "@/lib/db/supabase";
 import { reportError } from "@/lib/observability/error-reporter";
 import { relativeRedirect } from "@/lib/http/redirect";
-import { DEFAULT_AFTER_LOGIN, loginPath, safeRedirectPath } from "@/lib/auth/redirect";
+import { DEFAULT_AFTER_LOGIN, DEFAULT_AFTER_SIGNUP, loginPath, safeRedirectPath } from "@/lib/auth/redirect";
+import { siteOrigin } from "@/lib/auth/site-origin";
+import { SIGN_IN_LIMITS, limitSignInByIp } from "@/lib/auth/sign-in-limits";
 import {
   loginErrorFromAuthError,
   loginErrorFromRedirectParams,
@@ -28,6 +34,8 @@ import {
 export const EMAIL_OTP_TYPES = ["email", "magiclink", "signup", "invite", "recovery", "email_change"] as const;
 
 const MAX_TOKEN_LENGTH = 1024;
+const MAX_REDIRECT_TO_LENGTH = 4096;
+const CALLBACK_PATH = "/auth/callback";
 
 function isEmailOtpType(value: string | null): value is EmailOtpType & (typeof EMAIL_OTP_TYPES)[number] {
   return value !== null && (EMAIL_OTP_TYPES as readonly string[]).includes(value);
@@ -39,9 +47,50 @@ function boundedParam(value: string | null): string | null {
   return trimmed && trimmed.length <= MAX_TOKEN_LENGTH ? trimmed : null;
 }
 
+/**
+ * The `next` carried inside a `redirect_to={{ .RedirectTo }}` parameter, or null.
+ *
+ * The template puts redirect_to LAST because Go's text/template inserts RedirectTo verbatim:
+ * everything after `redirect_to=` (its own `?next=…`, already percent-encoded by
+ * emailRedirectUrl) belongs to it. An escaped value is understood too. Only our own callback
+ * URL on our origin counts; GoTrue's bare Site URL fallback, foreign URLs and the default
+ * landings (a returning user who started on /signup must not be sent to /welcome) do not.
+ */
+export function nextFromRedirectTo(req: NextRequest): string | null {
+  const search = req.nextUrl.search;
+  const match = /[?&]redirect_to=/.exec(search);
+  if (!match) return null;
+  const raw = search.slice(match.index + match[0].length);
+  if (!raw || raw.length > MAX_REDIRECT_TO_LENGTH) return null;
+
+  let target: URL | null = null;
+  for (const candidate of [raw, safeDecode(raw)]) {
+    if (!candidate) continue;
+    try {
+      target = new URL(candidate);
+      break;
+    } catch {
+      /* try the decoded form */
+    }
+  }
+  if (!target || target.pathname !== CALLBACK_PATH) return null;
+  if (target.origin !== siteOrigin(req) && target.origin !== req.nextUrl.origin) return null;
+
+  const next = safeRedirectPath(target.searchParams.get("next"));
+  return next && next !== DEFAULT_AFTER_LOGIN && next !== DEFAULT_AFTER_SIGNUP ? next : null;
+}
+
+function safeDecode(value: string): string | null {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return null;
+  }
+}
+
 export async function completeEmailSignIn(req: NextRequest, route: string): Promise<NextResponse> {
   const params = req.nextUrl.searchParams;
-  const next = safeRedirectPath(params.get("next")) ?? DEFAULT_AFTER_LOGIN;
+  const next = nextFromRedirectTo(req) ?? safeRedirectPath(params.get("next")) ?? DEFAULT_AFTER_LOGIN;
   const fail = (code: LoginErrorCode) => relativeRedirect(loginPath({ error: code, next }));
 
   // Supabase rejected the link itself (expired, already used, …) and says so in the URL.
@@ -54,15 +103,18 @@ export async function completeEmailSignIn(req: NextRequest, route: string): Prom
   if (!code && !tokenHash) return fail("link_invalid");
   if (!code && !isEmailOtpType(type)) return fail("link_invalid");
 
+  // Each attempt below may call GoTrue: cap them per client before Supabase is involved.
+  if (await limitSignInByIp(req, "auth:verify", SIGN_IN_LIMITS.verifyPerIp)) return fail("rate_limited");
+
   const client = createRouteHandlerSupabase(req);
   if (!client) return fail("auth_unavailable");
 
   let error: AuthError | null;
   try {
     if (code) {
-      ({ error } = await client.supabase.auth.exchangeCodeForSession(code));
+      ({ error } = await client.auth.exchangeCodeForSession(code));
     } else {
-      ({ error } = await client.supabase.auth.verifyOtp({
+      ({ error } = await client.auth.verifyOtp({
         type: type as EmailOtpType,
         token_hash: tokenHash as string
       }));

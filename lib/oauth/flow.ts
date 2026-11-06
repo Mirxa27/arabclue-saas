@@ -11,6 +11,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import type { Platform } from "@/lib/social/types";
 import { getSessionContext } from "@/lib/auth/session";
 import { getServiceSupabase } from "@/lib/db/supabase";
+import { HttpError } from "@/lib/api/errors";
 import { relativeRedirect } from "@/lib/http/redirect";
 import { reportError } from "@/lib/observability/error-reporter";
 import { generatePkcePair } from "@/lib/oauth/pkce";
@@ -90,7 +91,8 @@ export type OAuthCallbackConfig<T> = {
   exchange: (args: { code: string; codeVerifier?: string; state: OAuthStatePayload }) => Promise<T>;
   /**
    * Resolve the account and store the tokens for `merchantId`. Throw OAuthCallbackError to
-   * pick a code (e.g. account_lookup_failed, store_already_linked); anything else → save_failed.
+   * pick a code (e.g. account_lookup_failed, store_already_linked, channel_already_connected);
+   * anything else → save_failed.
    */
   persist: (args: { tokens: T; state: OAuthStatePayload; stateRaw: string; merchantId: string }) => Promise<void>;
 };
@@ -188,14 +190,23 @@ export async function persistSocialConnection(args: {
   }
   if (!externalId) throw new OAuthCallbackError("account_lookup_failed");
 
-  await upsertSocialChannel(getServiceSupabase(), args.merchantId, args.platform, {
-    externalId,
-    accessToken: args.tokens.accessToken,
-    refreshToken: args.tokens.refreshToken,
-    tokenExpiresAt: args.tokens.expiresIn
-      ? new Date(Date.now() + args.tokens.expiresIn * 1000).toISOString()
-      : undefined
-  });
+  try {
+    await upsertSocialChannel(getServiceSupabase(), args.merchantId, args.platform, {
+      externalId,
+      accessToken: args.tokens.accessToken,
+      refreshToken: args.tokens.refreshToken,
+      tokenExpiresAt: args.tokens.expiresIn
+        ? new Date(Date.now() + args.tokens.expiresIn * 1000).toISOString()
+        : undefined
+    });
+  } catch (err) {
+    // One store per provider account (social_channels_platform_external_id_key): retrying can
+    // never succeed, so say so instead of save_failed's "try again".
+    if (err instanceof HttpError && err.code === "channel_already_connected") {
+      throw new OAuthCallbackError("channel_already_connected", err);
+    }
+    throw err;
+  }
 
   try {
     await updateAgentStatus(args.merchantId, "social", true);

@@ -9,8 +9,11 @@ export const dynamic = "force-dynamic";
 const ROUTE = "GET /auth/confirm";
 
 /**
- * Token-hash landing (`{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=email&next=/dashboard`).
- * Needs no prior cookie, so it works when the mail app opens the link in another browser.
+ * Token-hash landing. Magic Link template:
+ * `{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=email&next=/dashboard&redirect_to={{ .RedirectTo }}`
+ * (redirect_to last; it carries the `next` the sign-in was requested with — see
+ * lib/auth/email-callback.ts). Needs no prior cookie, so it works when the mail app opens
+ * the link in another browser.
  */
 export async function GET(req: NextRequest) {
   try {

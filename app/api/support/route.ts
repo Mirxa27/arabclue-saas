@@ -1,7 +1,7 @@
 /**
  * POST /api/support — store a support request, acknowledge it, relay it to the inbox.
  *
- * Signed-in users only, rate-limited (5 per 15 minutes per IP + user). The ticket is
+ * Signed-in users only, rate-limited (5 per 15 minutes per user). The ticket is
  * stored first — if that fails the caller gets a 5xx, never a success for a request
  * nobody can see. The acknowledgement goes only to the account's own email address;
  * an `email` in the body is stored as the reply-to contact, never mailed automatically.
@@ -21,7 +21,7 @@ const ROUTE = "POST /api/support";
 export async function POST(req: NextRequest) {
   try {
     const user = await requireUserApi();
-    const limited = await enforceRateLimit(req, "support:create", 5, 15 * 60_000, user.id);
+    const limited = await enforceRateLimit(req, "support:create", 5, 15 * 60_000, { identity: user.id });
     if (limited instanceof NextResponse) return limited;
 
     const parsed = SupportBodySchema.safeParse(await req.json().catch(() => null));

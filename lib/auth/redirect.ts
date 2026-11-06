@@ -39,31 +39,36 @@ function isUnsafeForm(value: string): boolean {
 }
 
 /**
- * Returns `next` normalised to a same-origin path (`/path?query#hash`) when it is safe to
- * redirect to, otherwise null. Callers fall back to a fixed default.
+ * True when `value` and each of its percent-decoded forms is a plain same-origin path, so
+ * "/%2F%2Fevil.com" or "/%5Cevil.com" cannot become dangerous in a layer that decodes once more.
  */
-export function safeRedirectPath(next: string | null | undefined): string | null {
-  if (typeof next !== "string" || next.length === 0 || next.length > MAX_NEXT_LENGTH) return null;
-
-  // Check the raw value and each percent-decoded form, so "/%2F%2Fevil.com" or "/%5Cevil.com"
-  // cannot become dangerous in a layer that decodes once more.
-  let current = next;
-  let stable = false;
+function isSafeInEveryDecoding(value: string): boolean {
+  let current = value;
   for (let round = 0; round <= MAX_DECODE_ROUNDS; round++) {
-    if (isUnsafeForm(current)) return null;
+    if (isUnsafeForm(current)) return false;
     let decoded: string;
     try {
       decoded = decodeURIComponent(current);
     } catch {
-      return null; // malformed escapes are never a legitimate app path
+      return false; // malformed escapes are never a legitimate app path
     }
-    if (decoded === current) {
-      stable = true;
-      break;
-    }
+    if (decoded === current) return true;
     current = decoded;
   }
-  if (!stable) return null; // nested encoding deeper than any real link uses
+  return false; // nested encoding deeper than any real link uses
+}
+
+/**
+ * Returns `next` normalised to a same-origin path (`/path?query#hash`) when it is safe to
+ * redirect to, otherwise null. Callers fall back to a fixed default.
+ *
+ * Both the input and the value handed back are checked: URL normalisation removes dot
+ * segments, which can turn a harmless-looking input into a protocol-relative reference
+ * ("/.//evil.com", "/%2e//evil.com" and "/a/..//evil.com" all normalise to "//evil.com").
+ */
+export function safeRedirectPath(next: string | null | undefined): string | null {
+  if (typeof next !== "string" || next.length === 0 || next.length > MAX_NEXT_LENGTH) return null;
+  if (!isSafeInEveryDecoding(next)) return null;
 
   let url: URL;
   try {
@@ -72,8 +77,11 @@ export function safeRedirectPath(next: string | null | undefined): string | null
     return null;
   }
   if (url.origin !== PLACEHOLDER_ORIGIN) return null;
+
+  const out = `${url.pathname}${url.search}${url.hash}`;
+  if (out.length > MAX_NEXT_LENGTH || !isSafeInEveryDecoding(out)) return null;
   if (isSignInPagePath(url.pathname) || isAuthEndpointPath(url.pathname)) return null;
-  return `${url.pathname}${url.search}${url.hash}`;
+  return out;
 }
 
 /** `/login` with an optional stable error code and a validated `next`. */

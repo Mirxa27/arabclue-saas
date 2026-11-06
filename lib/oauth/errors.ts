@@ -21,6 +21,7 @@ export const OAUTH_ERROR_CODES = [
   "token_exchange_failed",
   "account_lookup_failed",
   "store_already_linked",
+  "channel_already_connected",
   "save_failed",
   "unknown"
 ] as const;
@@ -81,6 +82,10 @@ export const OAUTH_ERROR_MESSAGES: Record<OAuthErrorCode, OAuthErrorText> = {
   store_already_linked: {
     ar: "متجر سلة هذا مرتبط بالفعل بحساب آخر.",
     en: "This Salla store is already linked to another account."
+  },
+  channel_already_connected: {
+    ar: "هذا الحساب مربوط بالفعل بمتجر آخر على arabclue. افصله من هناك أولًا، أو اربط حسابًا آخر.",
+    en: "This account is already connected to another arabclue store. Disconnect it there first, or connect a different account."
   },
   save_failed: {
     ar: "تعذّر حفظ الربط. حاول مرة أخرى.",
