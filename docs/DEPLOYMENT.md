@@ -16,7 +16,12 @@ Hostinger supports Next.js via **Deploy JS application** and allows **unlimited 
 2. In hPanel → **Websites → arabclue.com → Node.js** (or use MCP `hosting_deployJsApplication`).
 3. Set build command: `npm run build`
 4. Set start command: `npm run start`
-5. Node.js version: **20.x**
+5. Node.js version: **20.x** (≥ 20.9.0). Node 20 is end-of-life upstream; move to **22.x LTS** as soon as hPanel offers it.
+
+> **Runtime notes (Next 15.5.29).**
+> - Always run a fresh `npm run build` after upgrading: 15.5.29 writes scoped route-cache seeds and refuses a `.next` built by an older version. Keep `.next/` writable at runtime so prerendered routes can copy their seeds into `.next/server/app/route-cache/`.
+> - The image optimizer is disabled (`images.unoptimized: true` in `next.config.mjs`); `/_next/image` returns 404 and `sharp` is never loaded at runtime. `sharp` is pinned to ≥ 0.35.5 via `overrides` only so audits stay clean; its prebuilt binaries need Node ≥ 20.9.0 and glibc ≥ 2.28 should the optimizer ever be re-enabled.
+> - Do not upgrade TypeScript to 7.x while on Next 15.5 — the build rejects it.
 
 **Option B — Git deploy**
 

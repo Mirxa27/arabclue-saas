@@ -1,6 +1,5 @@
 import { ImageResponse } from "next/og";
 
-export const runtime = "edge";
 export const alt = "arabclue — your dalīl for trading in Arabia";
 export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
@@ -29,16 +28,21 @@ export default function OpenGraphImage() {
           </svg>
           <span style={{ fontSize: 36, letterSpacing: "-0.02em" }}>arabclue</span>
         </div>
-        <div>
+        <div style={{ display: "flex", flexDirection: "column" }}>
+          {/* Satori requires display:flex on any element with more than one child node. */}
           <div
             style={{
+              display: "flex",
+              flexWrap: "wrap",
               fontSize: 72,
               lineHeight: 1.05,
               letterSpacing: "-0.03em",
               maxWidth: 900
             }}
           >
-            Your <span style={{ color: "#0F4D3E", fontStyle: "italic" }}>dalīl</span> for trading in Arabia.
+            <span>Your&nbsp;</span>
+            <span style={{ color: "#0F4D3E", fontStyle: "italic" }}>dalīl&nbsp;</span>
+            <span>for trading in Arabia.</span>
           </div>
           <p style={{ marginTop: 28, fontSize: 28, color: "#4A4540", maxWidth: 820, lineHeight: 1.4 }}>
             ZATCA invoicing · Agentic social media · Gulf-dialect voice · Arabic SEO
