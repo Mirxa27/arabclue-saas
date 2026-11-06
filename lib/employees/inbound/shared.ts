@@ -8,6 +8,7 @@
  * `after()` (lib/webhooks/inbound-claims.ts).
  */
 import { NextResponse } from "next/server";
+import type { InboundRejectionReason } from "@/lib/employees/integration-errors";
 import { logAction } from "@/lib/employees/runtime";
 import type { IntegrationKind } from "@/lib/employees/types";
 import { reportError } from "@/lib/observability/error-reporter";
@@ -37,11 +38,17 @@ export function nonEmptyString(value: unknown): string | null {
 }
 
 /**
- * Note in the employee's activity feed that inbound deliveries are refused because
- * no secret is configured. At most once per 10 minutes per employee, channel and
- * reason, so unauthenticated traffic cannot flood the table. Never throws.
+ * Note in the employee's activity feed that inbound deliveries are refused for a
+ * reason the merchant can fix (no secret configured, or a signature that matches no
+ * saved secret). The workspace shows INBOUND_REJECTION_COPY[reason]. At most once per
+ * 10 minutes per employee, channel and reason, so unauthenticated traffic cannot
+ * flood the table. Never throws.
  */
-export async function logInboundRejected(employeeId: string, channel: IntegrationKind, reason: string): Promise<void> {
+export async function logInboundRejected(
+  employeeId: string,
+  channel: IntegrationKind,
+  reason: InboundRejectionReason
+): Promise<void> {
   try {
     const gate = await rateLimit(`inbound-reject:${employeeId}:${channel}:${reason}`, 1, 10 * 60_000);
     if (!gate.success) return;

@@ -177,7 +177,7 @@ const PAGE_TOKEN = "EAAPAGEtoken_0123456789abcdef";
 
 type StubReply = { status: number; body: unknown };
 
-function graphStub(routes: { me: StubReply; subscribe?: StubReply }) {
+function graphStub(routes: { me: StubReply; subscribe?: StubReply; debugToken?: StubReply | Error }) {
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = String(input);
     if (url.includes("/me?")) return new Response(JSON.stringify(routes.me.body), { status: routes.me.status });
@@ -185,6 +185,10 @@ function graphStub(routes: { me: StubReply; subscribe?: StubReply }) {
       expect(init?.method).toBe("POST");
       const s = routes.subscribe ?? { status: 200, body: { success: true } };
       return new Response(JSON.stringify(s.body), { status: s.status });
+    }
+    if (url.includes("/debug_token?") && routes.debugToken) {
+      if (routes.debugToken instanceof Error) throw routes.debugToken;
+      return new Response(JSON.stringify(routes.debugToken.body), { status: routes.debugToken.status });
     }
     throw new Error(`unexpected fetch ${url}`);
   });
@@ -250,6 +254,75 @@ describe("prepareMetaIntegration", () => {
     });
     vi.stubGlobal("fetch", graphStub({ me: me({ id: "104" }) }));
     await expect(prepareMetaIntegration("instagram", input)).rejects.toMatchObject({ code: "instagram_not_linked" });
+  });
+
+  describe("RB-W1: which app signs the webhooks", () => {
+    const PLATFORM = { appId: "900000000000001", appSecret: "platform-app-secret-0123456789" };
+    const noSecret = { page_id: "104", page_access_token: PAGE_TOKEN, verify_token: "verify-token-0123456789" };
+    const issuedTo = (appId: string, extra: Record<string, unknown> = {}): StubReply => ({
+      status: 200,
+      body: { data: { app_id: appId, type: "PAGE", application: "App", is_valid: true, profile_id: "104", ...extra } }
+    });
+    const subscribed = (fetchMock: ReturnType<typeof graphStub>) =>
+      fetchMock.mock.calls.some(([u]) => String(u).includes("/subscribed_apps"));
+
+    it("without app_secret and without a platform app: refused before the Page is subscribed", async () => {
+      const fetchMock = graphStub({ me: me({ id: "104" }) });
+      vi.stubGlobal("fetch", fetchMock);
+      await expect(prepareMetaIntegration("meta", noSecret)).rejects.toMatchObject({ code: "app_secret_required", status: 400 });
+      expect(subscribed(fetchMock)).toBe(false);
+    });
+
+    it("a Page token issued to the platform app connects without app_secret, as connected_via 'platform'", async () => {
+      const fetchMock = graphStub({ me: me({ id: "104", name: "Store" }), debugToken: issuedTo(PLATFORM.appId) });
+      vi.stubGlobal("fetch", fetchMock);
+      const out = await prepareMetaIntegration("meta", noSecret, { platformApp: PLATFORM });
+      expect(out.config).toEqual({ connected_via: "platform", page_name: "Store", subscribed: true, subscribed_fields: ["messages"] });
+      expect(out.credentials).toEqual({ page_id: "104", page_access_token: PAGE_TOKEN, verify_token: "verify-token-0123456789" });
+
+      // Documented inspection call: the Page token as input_token, the platform app token as the caller.
+      const call = fetchMock.mock.calls.find(([u]) => String(u).includes("/debug_token?")) as FetchCall;
+      expect(new URL(String(call[0])).searchParams.get("input_token")).toBe(PAGE_TOKEN);
+      expect((call[1]?.headers as Record<string, string>).authorization).toBe(`Bearer ${PLATFORM.appId}|${PLATFORM.appSecret}`);
+      expect(String(call[0])).not.toContain(PLATFORM.appSecret); // never in a URL
+    });
+
+    it.each([
+      ["another app's token (Meta refuses to inspect it)", { status: 400, body: { error: { message: "(#100) The App_id in the input_token did not match the Viewing App", code: 100 } } }],
+      ["a token of a different app id", issuedTo("123456789")],
+      ["an invalid token", issuedTo(PLATFORM.appId, { is_valid: false })],
+      ["a token for another Page", issuedTo(PLATFORM.appId, { profile_id: "999" })]
+    ])("without app_secret, %s: app_secret_required, nothing subscribed", async (_l, debugToken) => {
+      const fetchMock = graphStub({ me: me({ id: "104" }), debugToken });
+      vi.stubGlobal("fetch", fetchMock);
+      const err = await prepareMetaIntegration("meta", noSecret, { platformApp: PLATFORM }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(MetaConnectError);
+      expect(err).toMatchObject({ code: "app_secret_required", status: 400 });
+      expect((err as Error).message).toMatch(/app_secret/);
+      expect(subscribed(fetchMock)).toBe(false);
+    });
+
+    it.each([
+      ["a network error", new TypeError("fetch failed")],
+      ["a 5xx", { status: 503, body: {} }],
+      ["Meta throttling", { status: 400, body: { error: { message: "(#4) Application request limit reached", code: 4 } } }]
+    ])("%s while asking Meta: meta_unavailable (502), nothing subscribed", async (_l, debugToken) => {
+      const fetchMock = graphStub({ me: me({ id: "104" }), debugToken });
+      vi.stubGlobal("fetch", fetchMock);
+      await expect(prepareMetaIntegration("meta", noSecret, { platformApp: PLATFORM })).rejects.toMatchObject({
+        code: "meta_unavailable",
+        status: 502
+      });
+      expect(subscribed(fetchMock)).toBe(false);
+    });
+
+    it("with the merchant's own app_secret the platform app is never consulted", async () => {
+      const fetchMock = graphStub({ me: me({ id: "104" }) }); // a /debug_token call would throw
+      vi.stubGlobal("fetch", fetchMock);
+      const out = await prepareMetaIntegration("meta", input, { platformApp: PLATFORM });
+      expect(out.config.connected_via).toBe("manual");
+      expect(out.credentials.app_secret).toBe(input.app_secret);
+    });
   });
 
   it("a failed subscribed_apps call does not block the connect", async () => {

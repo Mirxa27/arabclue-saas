@@ -14,6 +14,7 @@
  */
 import { safeEqual } from "@/lib/security/compare";
 import { verifyMetaSignature } from "@/lib/webhooks/meta-signature";
+import type { MetaDmConnectedVia } from "./meta";
 
 export { verifyMetaSignature };
 
@@ -36,9 +37,31 @@ function nonEmpty(value: unknown): string | null {
   return trimmed ? trimmed : null;
 }
 
-/** The integration's own app secret, else env META_APP_SECRET (operator-owned app), else null. */
-export function metaAppSecretFor(creds: Record<string, unknown> | null | undefined): string | null {
-  return nonEmpty(creds?.app_secret) ?? nonEmpty(process.env.META_APP_SECRET);
+/**
+ * `config.connected_via` of a row whose Page token the connect proved to be issued to
+ * the platform Meta app (META_APP_ID) — lib/employees/connect.ts. Server-owned: a
+ * client-supplied value is dropped before the row is stored.
+ */
+export const META_PLATFORM_CONNECTED_VIA = "platform" satisfies MetaDmConnectedVia;
+
+/** The parts of an ai_employee_integrations row the helpers below read. */
+export type MetaIntegrationFields = {
+  credentials?: Record<string, unknown> | null;
+  config?: Record<string, unknown> | null;
+};
+
+/**
+ * The key for X-Hub-Signature-256 on this row's deliveries: its own `app_secret`;
+ * META_APP_SECRET only for a row connected through the platform app (Meta signs a
+ * Page's webhooks with the secret of the app the Page token was issued to); else null.
+ * A bring-your-own-app row never falls back: the platform secret cannot verify what
+ * the merchant's app signs (RB-W1).
+ */
+export function metaAppSecretFor(row: MetaIntegrationFields): string | null {
+  const own = nonEmpty(row.credentials?.app_secret);
+  if (own) return own;
+  if (row.config?.connected_via === META_PLATFORM_CONNECTED_VIA) return nonEmpty(process.env.META_APP_SECRET);
+  return null;
 }
 
 /** The integration's own verify token, else env META_WEBHOOK_VERIFY_TOKEN, else null. */
@@ -51,6 +74,51 @@ export function metaAccountIdFor(kind: MetaKind, creds: Record<string, unknown> 
   const raw = kind === "meta" ? creds?.page_id : creds?.ig_account_id;
   if (typeof raw === "number" && Number.isSafeInteger(raw)) return String(raw);
   return nonEmpty(raw);
+}
+
+export type MetaDmEndpoint = {
+  kind: MetaKind;
+  /** The Page whose Send API node replies go through (both kinds). */
+  pageId: string;
+  /** What Meta puts in entry[].id: the Page id (meta) or the IG professional account id (instagram). */
+  accountId: string;
+};
+
+/**
+ * The DM endpoint a Messenger / Instagram row is set up for, or null when the row has
+ * no DM credentials: a Page access token, the Page id and the kind's account id. The
+ * Instagram row the employee OAuth flow writes for content publishing (a user token,
+ * no Page or IG ids) is not a DM endpoint, so it never takes part in verifying or
+ * routing DM deliveries (RB-W2).
+ */
+export function metaDmEndpoint(row: { kind: string; credentials?: Record<string, unknown> | null }): MetaDmEndpoint | null {
+  const kind: MetaKind | null = row.kind === "meta" || row.kind === "instagram" ? row.kind : null;
+  if (!kind || !nonEmpty(row.credentials?.page_access_token)) return null;
+  const pageId = metaAccountIdFor("meta", row.credentials);
+  const accountId = metaAccountIdFor(kind, row.credentials);
+  return pageId && accountId ? { kind, pageId, accountId } : null;
+}
+
+const SIGNATURE_HEADER_RE = /^sha256=[0-9a-f]{64}$/i;
+
+/** Whether X-Hub-Signature-256 has the shape Meta sends (`sha256=<64 hex>`), whatever key made it. */
+export function isMetaSignatureHeader(header: string | null | undefined): boolean {
+  return typeof header === "string" && SIGNATURE_HEADER_RE.test(header);
+}
+
+/**
+ * The kind an UNVERIFIED body says it is for (its top-level `object`), or null. Only
+ * used to choose which channel a refused delivery is noted on — never to route,
+ * store or answer anything.
+ */
+export function claimedMetaKind(raw: Uint8Array): MetaKind | null {
+  try {
+    const parsed: unknown = JSON.parse(new TextDecoder().decode(raw));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    return metaKindForObject((parsed as { object?: unknown }).object);
+  } catch {
+    return null;
+  }
 }
 
 export function metaWebhookEventId(kind: MetaKind, mid: string): string {

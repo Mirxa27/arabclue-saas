@@ -67,6 +67,67 @@ export const INTEGRATION_ERROR_COPY: Record<IntegrationErrorReason, { ar: string
 
 const REASONS = new Set<string>(Object.keys(INTEGRATION_ERROR_COPY));
 
+// ─── Refused inbound deliveries ─────────────────────────────────────────────
+
+/**
+ * Why inbound webhook deliveries on a channel were refused. Recorded by
+ * logInboundRejected (lib/employees/inbound/shared.ts) as an `ai_employee_actions`
+ * row `{ action: "inbound_rejected", channel, status: "failure", result: { reason } }`,
+ * at most once per 10 minutes per employee, channel and reason. The integration's
+ * status is NOT changed: these refusals can be triggered by anyone who knows the
+ * callback URL, so they only inform.
+ */
+export type InboundRejectionReason =
+  /** Meta / Instagram / WhatsApp: no App Secret to verify X-Hub-Signature-256 with. */
+  | "no_app_secret"
+  /** Meta / Instagram: a signed delivery matched none of the saved App Secrets. */
+  | "signature_mismatch"
+  /** Slack: no signing secret. */
+  | "no_signing_secret"
+  /** Telegram: the bot was connected without a webhook secret. */
+  | "no_webhook_secret"
+  /** Twilio SMS: no Auth Token. */
+  | "no_auth_token";
+
+export const INBOUND_REJECTION_COPY: Record<InboundRejectionReason, { ar: string; en: string }> = {
+  no_app_secret: {
+    ar: "رُفضت رسائل واردة على هذه القناة لأنه لا يوجد App Secret محفوظ للتحقق من توقيعها. أعد ربط القناة وأدخل App Secret لتطبيقك في Meta (إعدادات التطبيق ← الأساسية).",
+    en: "Incoming messages on this channel were refused: no App Secret is saved to verify their signature. Reconnect the channel with your Meta app's App Secret (App settings → Basic)."
+  },
+  signature_mismatch: {
+    ar: "رُفضت رسالة واردة على هذه القناة لأن توقيعها لا يطابق App Secret المحفوظ. إذا لم تصل رسائل العملاء، فأعد الربط باستخدام App Secret للتطبيق الذي أنشأت منه رمز الصفحة، فهو التطبيق الذي يرسل الإشعارات.",
+    en: "An incoming delivery on this channel was refused: its signature does not match the saved App Secret. If customers' messages are not arriving, reconnect with the App Secret of the app the Page token was created in — that is the app sending the webhooks."
+  },
+  no_signing_secret: {
+    ar: "رُفضت أحداث Slack الواردة لأنه لا يوجد Signing Secret محفوظ. أعد ربط Slack وأدخل Signing Secret لتطبيقك (Basic Information ← App Credentials).",
+    en: "Incoming Slack events were refused: no Signing Secret is saved. Reconnect Slack with your app's Signing Secret (Basic Information → App Credentials)."
+  },
+  no_webhook_secret: {
+    ar: "رُفضت رسائل Telegram الواردة لأن هذا البوت رُبط دون سرّ للـ Webhook. أعد ربط البوت ليُسجَّل Webhook جديد.",
+    en: "Incoming Telegram messages were refused: this bot was connected without a webhook secret. Reconnect the bot to register a new webhook."
+  },
+  no_auth_token: {
+    ar: "رُفضت رسائل SMS الواردة لأنه لا يوجد Auth Token محفوظ من Twilio. أعد ربط SMS وأدخل Auth Token من لوحة تحكم Twilio.",
+    en: "Incoming SMS were refused: no Twilio Auth Token is saved. Reconnect SMS with the Auth Token from your Twilio console."
+  }
+};
+
+/**
+ * The fixed copy for an activity row that records refused deliveries
+ * (`action === "inbound_rejected"` with a known `result.reason`), else null. Never
+ * echoes stored text.
+ */
+export function inboundRejectionCopy(row: {
+  action?: unknown;
+  result?: unknown;
+}): { reason: InboundRejectionReason; ar: string; en: string } | null {
+  if (row.action !== "inbound_rejected" || !row.result || typeof row.result !== "object") return null;
+  const reason = (row.result as { reason?: unknown }).reason;
+  if (typeof reason !== "string" || !Object.prototype.hasOwnProperty.call(INBOUND_REJECTION_COPY, reason)) return null;
+  const key = reason as InboundRejectionReason;
+  return { reason: key, ...INBOUND_REJECTION_COPY[key] };
+}
+
 /** Read `config.error` defensively (it is jsonb). Returns null when absent or unrecognised. */
 export function readIntegrationError(config: unknown): IntegrationErrorInfo | null {
   if (!config || typeof config !== "object") return null;

@@ -5,6 +5,10 @@
  *   meta / instagram  credentials validated per kind; the Page token must belong to the
  *                     Page (GET /me), the IG account is resolved from the Page, the Page
  *                     is subscribed to `messages`; external_id is the verified id.
+ *                     `app_secret` (the merchant app's, which signs its webhooks) is
+ *                     required unless /debug_token proves the Page token was issued to
+ *                     the platform app → connected_via 'platform', verified with
+ *                     META_APP_SECRET (RB-W1).
  *   whatsapp          validated; `app_secret` (the Meta app secret that signs webhooks)
  *                     accepted and stored encrypted.
  *   telegram          webhook registered at NEXT_PUBLIC_SITE_URL with a server-generated
@@ -16,7 +20,12 @@ import { randomBytes } from "crypto";
 import { z } from "zod";
 import { HttpError } from "@/lib/api/errors";
 import { formatZodIssues } from "@/lib/api/route-handler";
-import { MetaConnectError, prepareMetaIntegration } from "@/lib/employees/channels/meta";
+import {
+  META_APP_SECRET_REQUIRED_MESSAGE,
+  MetaConnectError,
+  prepareMetaIntegration,
+  type PlatformMetaApp
+} from "@/lib/employees/channels/meta";
 import { registerTelegramWebhook } from "@/lib/employees/channels/telegram";
 import type { IntegrationKind } from "@/lib/employees/types";
 
@@ -95,6 +104,16 @@ function clientConfig(config: Record<string, unknown>): Record<string, unknown> 
   return out;
 }
 
+/** Credentials a Messenger / Instagram DM connect writes — replaced as a whole on every connect. */
+const META_DM_CREDENTIAL_KEYS = ["page_id", "page_access_token", "ig_account_id", "app_secret", "verify_token"] as const;
+
+/** The platform Meta app, when META_APP_ID and META_APP_SECRET are both configured. */
+function platformMetaApp(): PlatformMetaApp | null {
+  const appId = process.env.META_APP_ID?.trim();
+  const appSecret = process.env.META_APP_SECRET?.trim();
+  return appId && appSecret ? { appId, appSecret } : null;
+}
+
 export async function prepareIntegrationConnect(
   employeeId: string,
   body: ConnectRequest,
@@ -104,22 +123,24 @@ export async function prepareIntegrationConnect(
 
   if (body.kind === "meta" || body.kind === "instagram") {
     const creds = parseCredentials(MetaConnectCredentialsSchema, body.credentials);
-    if (!creds.app_secret && !process.env.META_APP_SECRET?.trim()) {
-      throw new HttpError(
-        400,
-        "app_secret: required — the App Secret of the Meta app that sends the webhooks (App settings → Basic)",
-        "invalid_credentials"
-      );
+    // Without the merchant app's secret the only possible key is META_APP_SECRET, and only
+    // for a Page token of the platform app (checked with Meta in prepareMetaIntegration).
+    const platformApp = creds.app_secret ? null : platformMetaApp();
+    if (!creds.app_secret && !platformApp) {
+      throw new HttpError(400, META_APP_SECRET_REQUIRED_MESSAGE, "invalid_credentials");
     }
     let prepared;
     try {
-      prepared = await prepareMetaIntegration(body.kind, creds);
+      prepared = await prepareMetaIntegration(body.kind, creds, { platformApp });
     } catch (err) {
-      if (err instanceof MetaConnectError) throw new HttpError(400, err.message, err.code);
+      if (err instanceof MetaConnectError) throw new HttpError(err.status, err.message, err.code);
       throw err;
     }
-    // An OAuth-connected Instagram row (content publishing) keeps its tokens: add the DM fields to it.
-    const base = body.kind === "instagram" ? opts.existingCredentials ?? {} : {};
+    // An OAuth-connected Instagram row (content publishing) keeps its tokens: add the DM fields to
+    // it. An earlier connect's DM fields never survive — a stale app_secret would outrank
+    // META_APP_SECRET on a row reconnected through the platform app.
+    const base: Record<string, unknown> = body.kind === "instagram" ? { ...opts.existingCredentials } : {};
+    for (const key of META_DM_CREDENTIAL_KEYS) delete base[key];
     return {
       external_id: prepared.externalId,
       credentials: { ...base, ...prepared.credentials },

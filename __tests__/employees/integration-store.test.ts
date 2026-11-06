@@ -9,7 +9,12 @@ vi.mock("@/lib/observability/error-reporter", async (importOriginal) => {
 });
 
 import { loadEmployeeIntegrations, markIntegrationError, touchIntegrationLastEvent } from "@/lib/employees/integration-store";
-import { INTEGRATION_ERROR_COPY, readIntegrationError } from "@/lib/employees/integration-errors";
+import {
+  INBOUND_REJECTION_COPY,
+  inboundRejectionCopy,
+  INTEGRATION_ERROR_COPY,
+  readIntegrationError
+} from "@/lib/employees/integration-errors";
 import { reportError } from "@/lib/observability/error-reporter";
 
 const EMP = "88888888-8888-4888-8888-888888888888";
@@ -99,5 +104,29 @@ describe("integration error contract (workspace copy)", () => {
     expect(readIntegrationError({ error: { reason: "made_up", at: "t" } })).toBeNull();
     expect(readIntegrationError({})).toBeNull();
     expect(readIntegrationError(null)).toBeNull();
+  });
+});
+
+describe("refused inbound deliveries (activity copy)", () => {
+  it("has Arabic and English copy for every reason the inbound routes record", () => {
+    for (const copy of Object.values(INBOUND_REJECTION_COPY)) {
+      expect(copy.ar).toMatch(/[؀-ۿ]/);
+      expect(copy.en.length).toBeGreaterThan(10);
+    }
+    // Every reason logged by lib/employees/inbound/* has copy (the parameter type enforces it too).
+    for (const reason of ["no_app_secret", "signature_mismatch", "no_signing_secret", "no_webhook_secret", "no_auth_token"]) {
+      expect(INBOUND_REJECTION_COPY).toHaveProperty(reason);
+    }
+  });
+
+  it("maps an inbound_rejected activity row to its fixed copy, nothing else", () => {
+    expect(inboundRejectionCopy({ action: "inbound_rejected", result: { reason: "signature_mismatch" } })).toEqual({
+      reason: "signature_mismatch",
+      ...INBOUND_REJECTION_COPY.signature_mismatch
+    });
+    expect(inboundRejectionCopy({ action: "inbound_rejected", result: { reason: "<b>made up</b>" } })).toBeNull();
+    expect(inboundRejectionCopy({ action: "inbound_rejected", result: { reason: "toString" } })).toBeNull();
+    expect(inboundRejectionCopy({ action: "inbound_rejected", result: null })).toBeNull();
+    expect(inboundRejectionCopy({ action: "inbound_message", result: { reason: "no_app_secret" } })).toBeNull();
   });
 });

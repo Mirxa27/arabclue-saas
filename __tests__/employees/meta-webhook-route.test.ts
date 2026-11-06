@@ -3,6 +3,7 @@
  * Proves: fail-closed signature binding, the hub handshake, filtering, `${kind}:${mid}`
  * claims (replay → duplicate), ack-before-LLM via after(), partial claim failure → 500.
  */
+import { randomUUID } from "crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 import type { DecryptedIntegration } from "@/lib/employees/integration-store";
@@ -57,6 +58,9 @@ const PAGE = "104000000000001";
 const IG = "17841400000000001";
 const META_SECRET = "meta-app-secret-0123456789abcdef";
 const IG_SECRET = "insta-app-secret-0123456789abcdef";
+/** META_APP_SECRET — the platform app's secret, set in every production deployment. */
+const PLATFORM_SECRET = "operator-app-secret-0123456789";
+const UNSAVED_SECRET = "a-secret-nobody-saved-0123456789";
 const VERIFY = "merchant-verify-token-123";
 const URL_BASE = `https://arabclue.test/api/employees/webhooks/meta/${EMPLOYEE_ID}`;
 const ctx = (id = EMPLOYEE_ID) => ({ params: Promise.resolve({ id }) });
@@ -80,6 +84,15 @@ const metaRow = (creds: Record<string, unknown> = {}, over: Partial<DecryptedInt
   row("meta", { page_id: PAGE, page_access_token: "PAT", app_secret: META_SECRET, verify_token: VERIFY, ...creds }, over);
 const igRow = (creds: Record<string, unknown> = {}, over: Partial<DecryptedIntegration> = {}) =>
   row("instagram", { page_id: PAGE, page_access_token: "PAT", ig_account_id: IG, app_secret: IG_SECRET, verify_token: VERIFY, ...creds }, over);
+/** The row the employee OAuth flow writes for Instagram content publishing (lib/employees/oauth/flow.ts). */
+const oauthIgRow = (over: Partial<DecryptedIntegration> = {}) =>
+  row(
+    "instagram",
+    { access_token: "EAAuser-publishing-token", scope: "instagram_basic,instagram_content_publish", expires_in: 5183944 },
+    { external_id: null, config: { connected_via: "oauth" }, ...over }
+  );
+/** logInboundRejected is throttled per employee, channel and reason — tests asserting a note use their own employee. */
+const freshEmployee = () => randomUUID();
 
 /** Meta sends non-ASCII as \u escapes — sign and send exactly those bytes. */
 const escapeUnicode = (s: string) => s.replace(/[\u007f-￿]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
@@ -164,7 +177,11 @@ describe("POST authentication (fail closed)", () => {
     expect(h.db.writes()).toEqual([]);
     expect(h.afterTasks).toHaveLength(0);
     expect(handleMock).not.toHaveBeenCalled();
-    expect(logAction).not.toHaveBeenCalled();
+    // At most the throttled refusal note (RB-W1) — never an inbound_message / reply.
+    for (const [entry] of vi.mocked(logAction).mock.calls) {
+      expect(entry).toMatchObject({ action: "inbound_rejected", result: { reason: "signature_mismatch" } });
+    }
+    if (secret === null) expect(logAction).not.toHaveBeenCalled();
   });
 
   it("503 when no app secret is configured anywhere, and the refusal is logged", async () => {
@@ -177,10 +194,10 @@ describe("POST authentication (fail closed)", () => {
     );
   });
 
-  it("accepts META_APP_SECRET for an integration without its own app_secret", async () => {
-    process.env.META_APP_SECRET = "operator-app-secret-0123456789";
-    h.integrations = [metaRow({ app_secret: undefined })];
-    const res = await POST(signed(pageBody(dm("m_env")), "operator-app-secret-0123456789"), ctx());
+  it("accepts META_APP_SECRET for a row whose Page token was proven at connect to belong to the platform app", async () => {
+    process.env.META_APP_SECRET = PLATFORM_SECRET;
+    h.integrations = [metaRow({ app_secret: undefined }, { config: { connected_via: "platform" } })];
+    const res = await POST(signed(pageBody(dm("m_env")), PLATFORM_SECRET), ctx());
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ ok: true, accepted: 1 });
   });
@@ -356,5 +373,133 @@ describe("POST filtering", () => {
   it("other objects are acknowledged and ignored", async () => {
     const res = await POST(signed({ object: "whatsapp_business_account", entry: [] }, META_SECRET), ctx());
     expect(await res.json()).toEqual({ ok: true, ignored: "object" });
+  });
+});
+
+describe("RB-W1: META_APP_SECRET only for platform-app rows; refused deliveries are visible", () => {
+  const noteFor = (employeeId: string, channel: string, reason: string) =>
+    expect.objectContaining({ employeeId, action: "inbound_rejected", channel, status: "failure", result: { reason } });
+
+  it("a bring-your-own-app row without app_secret is never verified with META_APP_SECRET: 503, no_app_secret noted", async () => {
+    process.env.META_APP_SECRET = PLATFORM_SECRET; // production
+    const emp = freshEmployee();
+    h.integrations = [metaRow({ app_secret: undefined }, { employee_id: emp, config: { connected_via: "manual" } })];
+    // Signed by the merchant's own app (what Meta really sends here) or by the platform app: neither is accepted.
+    for (const [i, secret] of ["merchant-own-app-secret-0123456789", PLATFORM_SECRET].entries()) {
+      const res = await POST(signed(pageBody(dm(`m_byo_${i}`)), secret, { id: emp }), ctx(emp));
+      expect(res.status).toBe(503);
+      expect(await res.json()).toMatchObject({ code: "webhook_not_configured" });
+    }
+    expect(h.db.claimCalls()).toBe(0);
+    expect(handleMock).not.toHaveBeenCalled();
+    expect(logAction).toHaveBeenCalledWith(noteFor(emp, "meta", "no_app_secret"));
+  });
+
+  it("a signature that matches no saved secret: 403 and a signature_mismatch note on the channel Meta delivered for", async () => {
+    const emp = freshEmployee();
+    h.integrations = [metaRow({}, { employee_id: emp }), igRow({}, { employee_id: emp })];
+    const res = await POST(signed(igBody(dm("m_wrong", { recipient: IG, sender: "IGSID-1" })), UNSAVED_SECRET, { id: emp }), ctx(emp));
+    expect(res.status).toBe(403);
+    expect(h.db.claimCalls()).toBe(0);
+    expect(h.afterTasks).toHaveLength(0);
+    expect(logAction).toHaveBeenCalledTimes(1);
+    expect(logAction).toHaveBeenCalledWith(noteFor(emp, "instagram", "signature_mismatch"));
+  });
+
+  it("the note is throttled: once per 10 minutes per employee, channel and reason", async () => {
+    const emp = freshEmployee();
+    h.integrations = [metaRow({}, { employee_id: emp })];
+    for (let i = 0; i < 3; i++) {
+      expect((await POST(signed(pageBody(dm(`m_t${i}`)), UNSAVED_SECRET, { id: emp }), ctx(emp))).status).toBe(403);
+    }
+    expect(logAction).toHaveBeenCalledTimes(1);
+    expect(logAction).toHaveBeenCalledWith(noteFor(emp, "meta", "signature_mismatch"));
+  });
+
+  it("a delivery for a DM row with no secret of its own, unverifiable with the others' secrets: 403, no_app_secret noted", async () => {
+    const emp = freshEmployee();
+    h.integrations = [metaRow({}, { employee_id: emp }), igRow({ app_secret: undefined }, { employee_id: emp })];
+    const res = await POST(signed(igBody(dm("m_ig_app", { recipient: IG })), "instagram-own-app-secret-0123456789", { id: emp }), ctx(emp));
+    expect(res.status).toBe(403);
+    expect(logAction).toHaveBeenCalledWith(noteFor(emp, "instagram", "no_app_secret"));
+  });
+
+  it("requests that do not look like a signed Meta delivery for a connected channel are refused without a note", async () => {
+    const emp = freshEmployee();
+    h.integrations = [metaRow({}, { employee_id: emp })];
+    const url = `https://arabclue.test/api/employees/webhooks/meta/${emp}`;
+    const pageRaw = JSON.stringify(pageBody(dm("m_x")));
+    const requests = [
+      rawPost(url, pageRaw), // no signature
+      rawPost(url, pageRaw, { "x-hub-signature-256": "sha256=not-hex" }),
+      rawPost(url, "not json", { "x-hub-signature-256": signMetaPayload("not json", UNSAVED_SECRET) }),
+      signed({ object: "whatsapp_business_account", entry: [] }, UNSAVED_SECRET, { id: emp }),
+      signed(igBody(dm("m_y", { recipient: IG })), UNSAVED_SECRET, { id: emp }) // Instagram is not connected here
+    ];
+    for (const req of requests) expect((await POST(req, ctx(emp))).status).toBe(403);
+    expect(logAction).not.toHaveBeenCalled();
+  });
+
+  it("binding: an Instagram delivery signed with the Messenger row's secret is refused and noted for Instagram", async () => {
+    const emp = freshEmployee();
+    h.integrations = [metaRow({}, { employee_id: emp }), igRow({}, { employee_id: emp })];
+    const res = await POST(signed(igBody(dm("m_bind", { recipient: IG, sender: "IGSID-1" })), META_SECRET, { id: emp }), ctx(emp));
+    expect(res.status).toBe(403);
+    expect(h.db.claimCalls()).toBe(0);
+    expect(logAction).toHaveBeenCalledWith(noteFor(emp, "instagram", "signature_mismatch"));
+  });
+
+  it("an authenticated delivery whose channel's row has no secret of its own: 503, no_app_secret noted for that channel", async () => {
+    const emp = freshEmployee();
+    h.integrations = [metaRow({}, { employee_id: emp }), igRow({ app_secret: undefined }, { employee_id: emp })];
+    // One app serves both channels (docs §7.2), so Instagram events carry the Messenger row's signature.
+    const res = await POST(signed(igBody(dm("m_nosecret", { recipient: IG, sender: "IGSID-1" })), META_SECRET, { id: emp }), ctx(emp));
+    expect(res.status).toBe(503);
+    expect(h.db.claimCalls()).toBe(0);
+    expect(logAction).toHaveBeenCalledWith(noteFor(emp, "instagram", "no_app_secret"));
+  });
+});
+
+describe("RB-W2: only rows set up for DMs count", () => {
+  it("Instagram connected only for publishing (OAuth row): an Instagram delivery verified by the Messenger app → 200 kind_not_connected", async () => {
+    process.env.META_APP_SECRET = PLATFORM_SECRET; // production
+    h.integrations = [metaRow(), oauthIgRow()];
+    const res = await POST(signed(igBody(dm("m_ig_pub", { recipient: IG, sender: "IGSID-1" })), META_SECRET), ctx());
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, ignored: "kind_not_connected" });
+    expect(h.db.claimCalls()).toBe(0);
+    expect(logAction).not.toHaveBeenCalled();
+  });
+
+  it("…the same answer as when no Instagram row exists at all", async () => {
+    h.integrations = [metaRow()];
+    const res = await POST(signed(igBody(dm("m_ig_none", { recipient: IG, sender: "IGSID-1" })), META_SECRET), ctx());
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, ignored: "kind_not_connected" });
+  });
+
+  it("Messenger DMs keep working next to the publishing row", async () => {
+    process.env.META_APP_SECRET = PLATFORM_SECRET;
+    h.integrations = [metaRow(), oauthIgRow()];
+    const res = await POST(signed(pageBody(dm("m_pg")), META_SECRET), ctx());
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ ok: true, accepted: 1 });
+    await drain();
+    expect(handleMock).toHaveBeenCalledWith(expect.objectContaining({ channel: "meta", externalId: "PSID-1" }));
+  });
+
+  it("the publishing row alone does not make the employee a Meta DM endpoint (handshake 403, deliveries 404)", async () => {
+    process.env.META_APP_SECRET = PLATFORM_SECRET;
+    process.env.META_WEBHOOK_VERIFY_TOKEN = "platform-verify-token-1";
+    h.integrations = [oauthIgRow()];
+    const handshake = await GET(
+      new NextRequest(`${URL_BASE}?hub.mode=subscribe&hub.verify_token=platform-verify-token-1&hub.challenge=42`),
+      ctx()
+    );
+    expect(handshake.status).toBe(403);
+    const res = await POST(signed(igBody(dm("m_ig_only", { recipient: IG })), PLATFORM_SECRET), ctx());
+    expect(res.status).toBe(404);
+    expect(h.db.claimCalls()).toBe(0);
+    expect(logAction).not.toHaveBeenCalled();
   });
 });

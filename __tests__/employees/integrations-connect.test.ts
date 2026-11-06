@@ -63,11 +63,18 @@ const storedCreds = () => decryptIntegrationCredentials((upsert()?.payload as { 
 const connect = (body: unknown) => POST(jsonRequest(`https://arabclue.test/api/employees/${EMP}/integrations`, body), ctx);
 
 type GraphRoute = { status: number; body: unknown };
-function stubGraph(me: GraphRoute, subscribe: GraphRoute = { status: 200, body: { success: true } }) {
+function stubGraph(
+  me: GraphRoute,
+  subscribe: GraphRoute = { status: 200, body: { success: true } },
+  debugToken?: GraphRoute
+) {
   const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit): Promise<Response> => {
     const url = String(input);
     if (url.includes("/me?")) return new Response(JSON.stringify(me.body), { status: me.status });
     if (url.includes("/subscribed_apps")) return new Response(JSON.stringify(subscribe.body), { status: subscribe.status });
+    if (url.includes("/debug_token?") && debugToken) {
+      return new Response(JSON.stringify(debugToken.body), { status: debugToken.status });
+    }
     if (url.includes("api.telegram.org")) return new Response(JSON.stringify({ ok: true, result: true }), { status: 200 });
     throw new Error(`unexpected fetch ${url}`);
   });
@@ -84,8 +91,26 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.unstubAllGlobals();
-  for (const k of ["TOKEN_ENCRYPTION_KEY", "NEXT_PUBLIC_SITE_URL", "META_APP_SECRET"]) delete process.env[k];
+  for (const k of ["TOKEN_ENCRYPTION_KEY", "NEXT_PUBLIC_SITE_URL", "META_APP_SECRET", "META_APP_ID"]) delete process.env[k];
 });
+
+// The platform Meta app (META_APP_ID / META_APP_SECRET) — always configured in production.
+const PLATFORM_APP_ID = "900000000000001";
+const PLATFORM_SECRET = "operator-secret-0123456789";
+function usePlatformApp() {
+  process.env.META_APP_ID = PLATFORM_APP_ID;
+  process.env.META_APP_SECRET = PLATFORM_SECRET;
+}
+const tokenIssuedTo = (appId: string): GraphRoute => ({
+  status: 200,
+  body: { data: { app_id: appId, type: "PAGE", application: "App", is_valid: true, profile_id: PAGE } }
+});
+const OTHER_APP_TOKEN: GraphRoute = {
+  status: 400,
+  body: { error: { message: "(#100) The App_id in the input_token did not match the Viewing App", code: 100 } }
+};
+const subscribedCalls = (fetchMock: ReturnType<typeof stubGraph>) =>
+  fetchMock.mock.calls.filter(([u]) => String(u).includes("/subscribed_apps")).length;
 
 describe("meta (Messenger) connect", () => {
   it("verifies the token owns the Page, subscribes it, stores the verified id and encrypted secrets", async () => {
@@ -123,13 +148,56 @@ describe("meta (Messenger) connect", () => {
     expect(upsert()).toBeUndefined();
   });
 
-  it("requires app_secret unless the operator set META_APP_SECRET", async () => {
-    stubGraph({ status: 200, body: { id: PAGE } });
+  it("requires app_secret when no platform Meta app is configured, without calling Meta", async () => {
+    const fetchMock = stubGraph({ status: 200, body: { id: PAGE } });
     const res = await connect({ kind: "meta", credentials: { ...metaCreds, app_secret: undefined } });
     expect(res.status).toBe(400);
     expect((await res.json()).error).toMatch(/app_secret/);
-    process.env.META_APP_SECRET = "operator-secret-0123456789";
-    expect((await connect({ kind: "meta", credentials: { ...metaCreds, app_secret: "" } })).status).toBe(200);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(upsert()).toBeUndefined();
+  });
+
+  it.each([
+    ["omitted", undefined],
+    ["blank", ""]
+  ])("RB-W1: app_secret %s with META_APP_SECRET set (production) and a token of the merchant's own app → 400, nothing saved or subscribed", async (_l, appSecret) => {
+    usePlatformApp();
+    const fetchMock = stubGraph({ status: 200, body: { id: PAGE } }, undefined, OTHER_APP_TOKEN);
+    const res = await connect({ kind: "meta", credentials: { ...metaCreds, app_secret: appSecret } });
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/app_secret: required/);
+    expect(upsert()).toBeUndefined();
+    expect(subscribedCalls(fetchMock)).toBe(0);
+  });
+
+  it("RB-W1: a Page token issued to the platform app connects without app_secret as connected_via 'platform'", async () => {
+    usePlatformApp();
+    stubGraph({ status: 200, body: { id: PAGE, name: "Store" } }, undefined, tokenIssuedTo(PLATFORM_APP_ID));
+    const res = await connect({
+      kind: "meta",
+      credentials: { ...metaCreds, app_secret: undefined },
+      config: { connected_via: "manual" } // client value ignored either way
+    });
+    expect(res.status).toBe(200);
+    expect((upsert()?.payload as { config: Record<string, unknown> }).config).toMatchObject({ connected_via: "platform" });
+    const { app_secret: _omitted, ...withoutSecret } = metaCreds;
+    expect(storedCreds()).toEqual(withoutSecret);
+  });
+
+  it("a client cannot claim connected_via 'platform' (that would unlock META_APP_SECRET)", async () => {
+    usePlatformApp();
+    stubGraph({ status: 200, body: { id: PAGE } });
+    const res = await connect({ kind: "meta", credentials: metaCreds, config: { connected_via: "platform" } });
+    expect(res.status).toBe(200);
+    expect((upsert()?.payload as { config: Record<string, unknown> }).config).toMatchObject({ connected_via: "manual" });
+  });
+
+  it("502 (retry) when Meta cannot be asked which app issued the token", async () => {
+    usePlatformApp();
+    stubGraph({ status: 200, body: { id: PAGE } }, undefined, { status: 500, body: { error: { message: "Service unavailable", code: 2 } } });
+    const res = await connect({ kind: "meta", credentials: { ...metaCreds, app_secret: undefined } });
+    expect(res.status).toBe(502);
+    expect(upsert()).toBeUndefined();
   });
 
   it("400 with Meta's reason when the token belongs to another Page", async () => {
@@ -149,6 +217,32 @@ describe("instagram (Direct) connect", () => {
     expect(res.status).toBe(200);
     expect((upsert()?.payload as { external_id: string }).external_id).toBe(IG);
     expect(storedCreds()).toEqual({ access_token: "oauth-publishing-token", scope: "instagram_basic", ...metaCreds, ig_account_id: IG });
+  });
+
+  it("RB-W1: reconnecting through the platform app drops the app_secret an earlier manual connect stored", async () => {
+    usePlatformApp();
+    h.existing = {
+      access_token: "oauth-publishing-token",
+      scope: "instagram_basic",
+      page_id: PAGE,
+      page_access_token: "EAAold-page-token-0123456789",
+      ig_account_id: IG,
+      app_secret: "stale-own-app-secret-0123456789",
+      verify_token: "old-verify-token-123456"
+    };
+    stubGraph({ status: 200, body: { id: PAGE, instagram_business_account: { id: IG } } }, undefined, tokenIssuedTo(PLATFORM_APP_ID));
+    const res = await connect({ kind: "instagram", credentials: { ...metaCreds, app_secret: undefined } });
+    expect(res.status).toBe(200);
+    // A stale own secret would outrank META_APP_SECRET and every platform-signed delivery would be refused.
+    expect(storedCreds()).toEqual({
+      access_token: "oauth-publishing-token",
+      scope: "instagram_basic",
+      page_id: PAGE,
+      page_access_token: PAGE_TOKEN,
+      verify_token: metaCreds.verify_token,
+      ig_account_id: IG
+    });
+    expect((upsert()?.payload as { config: Record<string, unknown> }).config).toMatchObject({ connected_via: "platform" });
   });
 
   it("400 when the Page has no linked Instagram professional account", async () => {

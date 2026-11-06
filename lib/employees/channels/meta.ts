@@ -284,16 +284,95 @@ export async function subscribeMetaPageToMessages(creds: MetaMessagingCredential
   }
 }
 
-export type MetaConnectErrorCode = "token_invalid" | "page_mismatch" | "instagram_not_linked" | "instagram_mismatch";
+export type MetaConnectErrorCode =
+  | "token_invalid"
+  | "page_mismatch"
+  | "instagram_not_linked"
+  | "instagram_mismatch"
+  | "app_secret_required"
+  | "meta_unavailable";
 
-/** A connect that must be refused (400) — the message is safe to show the merchant. */
+/**
+ * A connect that must be refused — the message is safe to show the merchant.
+ * `status`: 400 when the merchant must change the input, 502 when Meta could not be
+ * asked (try again).
+ */
 export class MetaConnectError extends Error {
   readonly code: MetaConnectErrorCode;
-  constructor(code: MetaConnectErrorCode, message: string) {
+  readonly status: 400 | 502;
+  constructor(code: MetaConnectErrorCode, message: string, status: 400 | 502 = 400) {
     super(message);
     this.name = "MetaConnectError";
     this.code = code;
+    this.status = status;
   }
+}
+
+export const META_APP_SECRET_REQUIRED_MESSAGE =
+  "app_secret: required — the App Secret (App settings → Basic) of the Meta app the Page access token was generated in; Meta signs that app's webhooks with it";
+
+/** The platform Meta app (META_APP_ID / META_APP_SECRET): the operator's app, used for Meta OAuth and /api/meta/webhook. */
+export type PlatformMetaApp = { appId: string; appSecret: string };
+
+/**
+ * How a Messenger / Instagram DM row is verified (config.connected_via): "manual" — the
+ * merchant's own app, its `app_secret` is stored; "platform" — the Page token was issued
+ * to the platform app, deliveries are verified with META_APP_SECRET.
+ */
+export type MetaDmConnectedVia = "manual" | "platform";
+
+// "An unknown error occurred" / "Service temporarily unavailable", plus the throttling codes.
+const META_TRANSIENT_CODES = new Set([1, 2, ...RATE_LIMIT_CODES]);
+
+function metaUnavailable(detail: string): MetaConnectError {
+  return new MetaConnectError(
+    "meta_unavailable",
+    `Could not ask Meta which app issued the Page access token (${detail}). Try again in a minute.`,
+    502
+  );
+}
+
+/**
+ * Whether the Page access token was issued to the platform app, for this Page.
+ *
+ * GET /debug_token?input_token=<page token>, authenticated with the platform app's
+ * access token "{app-id}|{app-secret}" (server-side only; sent in the Authorization
+ * header, never in the URL). Meta inspects only tokens of the calling app ("The tokens
+ * must be from the same app"), so a token of any other app is refused (→ false); for
+ * the platform's own tokens `data.app_id` must be META_APP_ID, `is_valid` true and the
+ * Page in `profile_id` (when present) the one being connected. Throws
+ * MetaConnectError("meta_unavailable", 502) when Meta cannot answer (network, 5xx,
+ * throttling) rather than calling the token foreign.
+ * https://developers.facebook.com/docs/graph-api/reference/debug_token/
+ * https://developers.facebook.com/docs/facebook-login/guides/access-tokens/debugging
+ */
+export async function isPlatformAppPageToken(
+  creds: Pick<MetaMessagingCredentials, "page_id" | "page_access_token">,
+  app: PlatformMetaApp
+): Promise<boolean> {
+  let res: Response;
+  try {
+    res = await fetch(graphUrl("debug_token", { input_token: creds.page_access_token }), {
+      headers: { authorization: `Bearer ${app.appId}|${app.appSecret}` },
+      signal: AbortSignal.timeout(GRAPH_TIMEOUT_MS)
+    });
+  } catch (err) {
+    throw metaUnavailable(err instanceof Error ? err.message : String(err));
+  }
+  const json = (await res.json().catch(() => ({}))) as {
+    data?: { app_id?: unknown; is_valid?: unknown; profile_id?: unknown };
+  };
+  if (!res.ok) {
+    const error = graphErrorBody(json);
+    if (res.status >= 500 || (error?.code !== undefined && META_TRANSIENT_CODES.has(error.code))) {
+      throw metaUnavailable(error?.message ?? `HTTP ${res.status}`);
+    }
+    return false; // another app's token (#100), or one Meta no longer accepts
+  }
+  const data = json.data;
+  if (!data || data.is_valid !== true || idString(data.app_id) !== app.appId) return false;
+  const profileId = idString(data.profile_id);
+  return profileId === null || profileId === creds.page_id;
 }
 
 export type PreparedMetaIntegration = {
@@ -301,7 +380,7 @@ export type PreparedMetaIntegration = {
   /** Verified routing id: the Page id (meta) or the IG professional account id (instagram). */
   externalId: string;
   config: {
-    connected_via: "manual";
+    connected_via: MetaDmConnectedVia;
     page_name: string | null;
     subscribed: boolean;
     subscribed_fields: string[];
@@ -311,12 +390,21 @@ export type PreparedMetaIntegration = {
 
 /**
  * Prove the token belongs to the Page being connected (GET /me must return
- * page_id), resolve / check the Instagram account, then subscribe the Page to
- * `messages`. Throws MetaConnectError when the connection must be refused.
+ * page_id), establish which secret will verify the Page's webhooks, resolve / check
+ * the Instagram account, then subscribe the Page to `messages`. Throws
+ * MetaConnectError when the connection must be refused — always before the Page is
+ * subscribed.
+ *
+ * Meta signs a Page's webhooks with the secret of the app the Page token was issued
+ * to (POST subscribed_apps subscribes exactly that app). So without the merchant's own
+ * `app_secret` the only usable key is META_APP_SECRET, and only when the token belongs
+ * to the platform app (`opts.platformApp`, proven with /debug_token) — otherwise the
+ * connect is refused instead of saving a channel whose every delivery fails (RB-W1).
  */
 export async function prepareMetaIntegration(
   kind: MetaChannel,
-  input: MetaMessagingCredentials
+  input: MetaMessagingCredentials,
+  opts: { platformApp?: PlatformMetaApp | null } = {}
 ): Promise<PreparedMetaIntegration> {
   let identity: MetaPageIdentity;
   try {
@@ -332,6 +420,15 @@ export async function prepareMetaIntegration(
       "page_mismatch",
       `The access token belongs to ${identity.id}, not Page ${input.page_id}. Use a Page access token for this Page.`
     );
+  }
+
+  let connectedVia: MetaDmConnectedVia = "manual";
+  if (!input.app_secret) {
+    const platform = opts.platformApp ?? null;
+    if (!platform || !(await isPlatformAppPageToken(input, platform))) {
+      throw new MetaConnectError("app_secret_required", META_APP_SECRET_REQUIRED_MESSAGE);
+    }
+    connectedVia = "platform";
   }
 
   const credentials: MetaMessagingCredentials = {
@@ -366,7 +463,7 @@ export async function prepareMetaIntegration(
     credentials,
     externalId,
     config: {
-      connected_via: "manual",
+      connected_via: connectedVia,
       page_name: identity.name,
       subscribed: subscription.ok,
       subscribed_fields: subscription.ok ? ["messages"] : [],
