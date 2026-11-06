@@ -16,6 +16,10 @@
     {
       "path": "/api/cron/social-scheduler",
       "schedule": "*/15 * * * *"
+    },
+    {
+      "path": "/api/zatca/sweep",
+      "schedule": "*/10 * * * *"
     }
   ]
 }

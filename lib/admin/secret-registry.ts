@@ -211,11 +211,23 @@ export const SECRET_GROUPS: SecretGroupDef[] = [
   {
     id: "zatca",
     title: "ZATCA / Fatoora",
-    description: "E-invoicing compliance",
+    description:
+      "E-invoicing environment. Every merchant onboards its own EGS unit in Settings → ZATCA (key and CSIDs stored encrypted per merchant); there is no platform-wide CSID.",
     fields: [
-      { key: "ZATCA_FATOORA_BASE", label: "Fatoora API base", required: false, type: "url" },
-      { key: "ZATCA_CSID", label: "Platform CSID fallback", required: false, type: "secret" },
-      { key: "ZATCA_PRIVATE_KEY_PEM", label: "Platform private key PEM", required: false, type: "secret" }
+      {
+        key: "ZATCA_ENVIRONMENT",
+        label: "Fatoora environment",
+        required: false,
+        type: "text",
+        hint: "sandbox (developer portal) | simulation | production — unset: e-invoicing is off and Salla orders wait"
+      },
+      {
+        key: "ZATCA_FATOORA_BASE",
+        label: "Fatoora API base (optional override)",
+        required: false,
+        type: "url",
+        hint: "Defaults to https://gw-fatoora.zatca.gov.sa/e-invoicing/{developer-portal|simulation|core}"
+      }
     ]
   },
   {

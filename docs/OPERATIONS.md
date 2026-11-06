@@ -90,7 +90,10 @@ Common failure mode: Salla review takes 10+ business days. Mitigation: ship a di
 ### Common questions and canned responses
 
 **Q: My invoice was rejected by ZATCA.**
-→ Open the invoice in the dashboard, click "View ZATCA response." 90% of rejections are due to invalid VAT number format, malformed postal code, or missing CR number. Fix in Settings → ZATCA tax details.
+→ Open the invoice: ZATCA's error codes are listed under *ZATCA validation*. Most rejections are seller-profile problems (VAT number format, 4-digit building number, 5-digit postal code, district). Fix them in Settings → ZATCA tax details, then press **Reissue corrected** on the invoice — ZATCA requires a new document (new number `…-R1`); the rejected one stays on record.
+
+**Q: Orders aren't getting invoices.**
+→ The invoices page shows orders *waiting* and why: store not linked, subscription not active, ZATCA not onboarded, or e-invoicing paused. They're invoiced automatically once that's fixed (or press **Issue pending invoices**). Orders with 0% VAT lines are not invoiced automatically (ZATCA needs an exemption reason).
 
 **Q: The social agent posted something off-brand.**
 → Two fixes: (1) Refine your Brand Kit's `avoid_words`. (2) Edit individual posts before they go live — they're scheduled, not auto-published until cron picks them up.

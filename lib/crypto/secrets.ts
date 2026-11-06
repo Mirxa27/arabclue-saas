@@ -21,6 +21,36 @@ export function encryptSecret(plaintext: string): string {
   return `${PREFIX}${iv.toString("base64url")}.${tag.toString("base64url")}.${encrypted.toString("base64url")}`;
 }
 
+export class EncryptionKeyMissingError extends Error {
+  constructor() {
+    super("TOKEN_ENCRYPTION_KEY is required to store this credential");
+    this.name = "EncryptionKeyMissingError";
+  }
+}
+
+/** True when TOKEN_ENCRYPTION_KEY is configured. */
+export function hasEncryptionKey(): boolean {
+  return deriveKey() !== null;
+}
+
+/**
+ * Encrypt a credential that must never be stored in plaintext (ZATCA EGS private keys and CSIDs):
+ * throws EncryptionKeyMissingError instead of encryptSecret's dev-only plaintext fallback.
+ */
+export function encryptSecretStrict(plaintext: string): string {
+  if (!plaintext) throw new Error("refusing to encrypt an empty credential");
+  if (!hasEncryptionKey()) throw new EncryptionKeyMissingError();
+  const out = encryptSecret(plaintext);
+  if (!out.startsWith(PREFIX)) throw new EncryptionKeyMissingError();
+  return out;
+}
+
+/** Decrypt a value stored by encryptSecretStrict: plaintext is refused, not passed through. */
+export function decryptSecretStrict(stored: string | null | undefined): string {
+  if (!stored || !stored.startsWith(PREFIX)) throw new Error("stored credential is not encrypted");
+  return decryptSecret(stored);
+}
+
 /** Decrypt stored token; accepts legacy plaintext values. */
 export function decryptSecret(stored: string | null | undefined): string {
   if (!stored) return "";

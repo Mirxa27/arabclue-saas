@@ -6,6 +6,7 @@ import { createOAuthState, verifyOAuthState } from "@/lib/oauth/state";
 import { SALLA_AUTH_BASE } from "@/lib/salla/oauth";
 import { graphUrl } from "@/lib/meta/graph";
 import type { ConnectionTestResult, TestableService } from "@/lib/admin/types";
+import { getZatcaConfig } from "@/lib/zatca/config";
 
 async function timed<T>(fn: () => Promise<T>): Promise<{ result: T; latencyMs: number }> {
   const start = Date.now();
@@ -203,8 +204,14 @@ async function testWathq(): Promise<ConnectionTestResult> {
 }
 
 async function testZatca(): Promise<ConnectionTestResult> {
-  const base = process.env.ZATCA_FATOORA_BASE;
-  if (!base) return { ok: false, message: "ZATCA_FATOORA_BASE not configured" };
+  let base: string;
+  try {
+    const cfg = getZatcaConfig();
+    if (!cfg) return { ok: false, message: "ZATCA_ENVIRONMENT not configured" };
+    base = cfg.baseUrl;
+  } catch (err) {
+    return { ok: false, message: err instanceof Error ? err.message : "ZATCA configuration invalid" };
+  }
   try {
     const { latencyMs } = await timed(async () => {
       const res = await fetch(base, { method: "HEAD", signal: AbortSignal.timeout(10_000) }).catch(() =>

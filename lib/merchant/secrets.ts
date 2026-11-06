@@ -12,7 +12,10 @@ import { HttpError } from "@/lib/api/errors";
 import { getServiceSupabase } from "@/lib/db/supabase";
 import { reportError } from "@/lib/observability/error-reporter";
 
-/** The merchant's ZATCA production CSID (Basic credential for Fatoora), or null before onboarding. */
+/**
+ * @deprecated merchants.zatca_csid is no longer read (F14): ZATCA credentials live per EGS unit in
+ * zatca_egs_units (lib/zatca/egs-store.ts). Kept only so nothing breaks while other branches merge.
+ */
 export async function getMerchantZatcaCsid(merchantId: string, sb: SupabaseClient = getServiceSupabase()): Promise<string | null> {
   const { data, error } = await sb.from("merchants").select("zatca_csid").eq("id", merchantId).maybeSingle();
   if (error) {

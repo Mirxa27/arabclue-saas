@@ -17,23 +17,11 @@ import {
   SALLA_SHIPPING_LINE_NAME,
   type SallaOrderInvoice
 } from "@/lib/salla/order-invoice";
-import { generateInvoice } from "@/lib/zatca/invoice";
+import { computeTotals } from "@/lib/zatca/invoice";
 
-const SELLER = {
-  name: "Bait Al Oud",
-  vatNumber: "300000000000003",
-  address: { street: "King Fahd Rd", building: "1234", city: "Riyadh", postalCode: "12211" }
-};
-
+/** The totals the ZATCA document built from these lines carries (lib/zatca/invoice.ts computeTotals). */
 function invoiceFor(mapped: SallaOrderInvoice) {
-  return generateInvoice({
-    invoiceNumber: `INV-${mapped.orderId}`,
-    issueDate: mapped.issueDate,
-    icv: 1,
-    seller: SELLER,
-    buyer: mapped.buyer,
-    lines: mapped.lines
-  });
+  return { totals: computeTotals(mapped.lines) };
 }
 
 function mapOk(order: SallaOrder): SallaOrderInvoice {

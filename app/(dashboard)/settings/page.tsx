@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/toast";
 import { apiFetch, ApiClientError } from "@/lib/api/client";
 import { useMerchant } from "@/hooks/use-merchant";
+import { ZatcaOnboardingCard } from "@/components/settings/zatca-onboarding";
 import type { SellerAddress } from "@/lib/types/database";
 import {
   Receipt,
@@ -228,6 +229,8 @@ export default function SettingsPage() {
             </div>
           </div>
         </Card>
+
+        <ZatcaOnboardingCard vatNumber={merchant?.vat_number ?? null} />
 
         {/* Billing */}
         <Card>

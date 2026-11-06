@@ -65,7 +65,13 @@ export type MerchantSecrets = {
 /** A full merchants row, as only the service role can read it. */
 export type MerchantRow = Merchant & MerchantSecrets;
 
-export type InvoiceStatus = "generated" | "submitted" | "cleared" | "rejected" | "failed";
+/**
+ * generated: signed, not yet accepted by ZATCA · reported: simplified, accepted (REPORTED) ·
+ * cleared: standard, accepted (CLEARED; cleared_xml is the legal document) · rejected: ZATCA
+ * validation errors (reissue a corrected document) · failed: not delivered (retried) ·
+ * submitted: legacy.
+ */
+export type InvoiceStatus = "generated" | "submitted" | "reported" | "cleared" | "rejected" | "failed";
 
 export type InvoiceSummary = {
   id: string;
@@ -86,6 +92,22 @@ export type Invoice = InvoiceSummary & {
   subtotal: number | null;
   vat: number | null;
   fatoora_response: Record<string, unknown> | null;
+  /** Phase-2 columns (20261106003500_zatca_phase2.sql); null on invoices issued before it. */
+  invoice_type?: "standard" | "simplified" | null;
+  document_type?: "invoice" | "credit_note" | "debit_note";
+  environment?: "sandbox" | "simulation" | "production" | null;
+  previous_invoice_hash?: string | null;
+  issued_at?: string | null;
+  buyer_name?: string | null;
+  buyer_vat_number?: string | null;
+  cleared_xml?: string | null;
+  validation_warnings?: Array<{ code?: string; category?: string; message?: string }> | null;
+  validation_errors?: Array<{ code?: string; category?: string; message?: string }> | null;
+  submitted_at?: string | null;
+  submission_attempts?: number;
+  superseded_by?: string | null;
+  reissue_of?: string | null;
+  status_note?: string | null;
 };
 
 export type SocialPostStatus = "scheduled" | "publishing" | "published" | "failed" | "canceled";
