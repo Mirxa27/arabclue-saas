@@ -52,8 +52,8 @@ function specificity(selector: string): [number, number, number] {
     list.reduce((m, s) => (s[0] > m[0] || (s[0] === m[0] && (s[1] > m[1] || (s[1] === m[1] && s[2] > m[2]))) ? s : m), [0, 0, 0]);
   let total: [number, number, number] = [0, 0, 0];
   let rest = selector;
-  // :is(...) / :not(...) — specificity of the most specific argument.
-  const fn = /:(is|not)\(/;
+  // :is(...) / :not(...) — specificity of the most specific argument; :where(...) — zero.
+  const fn = /:(is|not|where)\(/;
   for (;;) {
     const m = fn.exec(rest);
     if (!m) break;
@@ -77,7 +77,7 @@ function specificity(selector: string): [number, number, number] {
       } else cur += ch;
     }
     args.push(cur);
-    total = add(total, max(args.map((a) => specificity(a.trim()))));
+    if (m[1] !== "where") total = add(total, max(args.map((a) => specificity(a.trim()))));
     rest = rest.slice(0, m.index) + " " + rest.slice(i);
   }
   const ids = (rest.match(/#[\w-]+/g) ?? []).length;
@@ -115,6 +115,16 @@ describe("ZOOM-01 — 16px text entry on coarse pointers", () => {
 
   it("leaves intentionally larger fields alone", () => {
     expect(zoomRules[0].selector).toContain(":not(.text-lg, .text-xl, .text-2xl");
+  });
+
+  it("lets flex/grid text fields shrink below their (now larger) intrinsic width, at zero specificity", () => {
+    // Without it a `flex-1` composer input keeps its size="20" width as a minimum and pushes
+    // its send button out of narrow panels once the font is 16px.
+    const rule = rulesMatching((r) => decl(r, "min-width") === "0" && r.selector.includes("textarea"))[0];
+    expect(rule).toBeDefined();
+    expect(rule.selector.trim().startsWith(":where(")).toBe(true);
+    expect(specificity(rule.selector)).toEqual([0, 0, 0]);
+    expect(rule.selector).toContain('[type="checkbox"]');
   });
 
   it("survives the Tailwind build (base layer is always emitted)", async () => {

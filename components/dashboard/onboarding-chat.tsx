@@ -44,9 +44,13 @@ export default function OnboardingChat({ step, context, open, onToggle }: Onboar
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Auto-scroll to bottom when new messages appear
+  // Auto-scroll the message list (only the list: scrollIntoView also scrolled the
+  // overflow-hidden panel and the page behind it) to the newest message.
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    const list = bottomRef.current?.parentElement;
+    if (!list) return;
+    if (typeof list.scrollTo === "function") list.scrollTo({ top: list.scrollHeight, behavior: "smooth" });
+    else list.scrollTop = list.scrollHeight;
   }, [messages]);
 
   // Focus input when chat opens

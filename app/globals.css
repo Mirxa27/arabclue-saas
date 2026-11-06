@@ -176,6 +176,14 @@
     }
   }
 
+  /* A text control that is a flex/grid item (`flex-1` composers, search rows) keeps its
+     intrinsic size="20" width as its minimum, which grows with the 16px size above and pushed
+     the send button out of the onboarding chat on phones. Let such fields shrink; :where()
+     keeps this at zero specificity so an explicit min-w-* utility still wins. */
+  :where(input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"], [type="color"], [type="button"], [type="submit"], [type="reset"], [type="image"], [type="hidden"]), select, textarea) {
+    min-width: 0;
+  }
+
   /* Arabic / RTL */
   .ar, [dir="rtl"] {
     font-family: "IBM Plex Sans Arabic", "Noto Sans Arabic", Tahoma, sans-serif;
