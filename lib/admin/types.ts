@@ -27,7 +27,8 @@ export type ConfigGroup = {
 };
 
 export type AgentSettings = {
-  social: { enabled: boolean; cronMinutes: number; maxPostsPerRun: number };
+  /** The scheduler itself is triggered every 15 minutes (vercel.json, scripts/hostinger-cron.sh). */
+  social: { enabled: boolean; maxPostsPerRun: number };
   voice: { enabled: boolean; defaultDialect: "khaliji" | "msa" | "english" };
   seo: { enabled: boolean; model: string; residency: "global" | "ksa" | "eu" };
 };

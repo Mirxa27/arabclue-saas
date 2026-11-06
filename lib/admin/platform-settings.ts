@@ -4,10 +4,59 @@ import { reportError } from "@/lib/observability/error-reporter";
 import type { AgentSettings, FeatureSettings } from "@/lib/admin/types";
 
 const DEFAULT_AGENTS: AgentSettings = {
-  social: { enabled: true, cronMinutes: 15, maxPostsPerRun: 50 },
+  social: { enabled: true, maxPostsPerRun: 50 },
   voice: { enabled: true, defaultDialect: "khaliji" },
   seo: { enabled: true, model: "gpt-4o-mini", residency: "global" }
 };
+
+type Obj = Record<string, unknown>;
+const isObj = (v: unknown): v is Obj => typeof v === "object" && v !== null && !Array.isArray(v);
+const bool = (v: unknown, fallback: boolean) => (typeof v === "boolean" ? v : fallback);
+const intIn = (v: unknown, min: number, max: number, fallback: number) =>
+  typeof v === "number" && Number.isInteger(v) && v >= min && v <= max ? v : fallback;
+const oneOf = <T extends string>(v: unknown, allowed: readonly T[], fallback: T): T =>
+  typeof v === "string" && (allowed as readonly string[]).includes(v) ? (v as T) : fallback;
+
+/**
+ * Stored agent settings over the defaults, one agent and one field at a time. A stored
+ * row may be partial or come from an older version (e.g. the retired social `cronMinutes`):
+ * a shallow merge would leave a missing field undefined — `maxPostsPerRun` undefined
+ * stops the scheduler from claiming anything — so every field is validated and falls back
+ * to its default; unknown fields are dropped.
+ */
+export function normalizeAgentSettings(stored: unknown): AgentSettings {
+  const s = isObj(stored) ? stored : {};
+  const social = isObj(s.social) ? s.social : {};
+  const voice = isObj(s.voice) ? s.voice : {};
+  const seo = isObj(s.seo) ? s.seo : {};
+  const d = DEFAULT_AGENTS;
+  return {
+    social: {
+      enabled: bool(social.enabled, d.social.enabled),
+      maxPostsPerRun: intIn(social.maxPostsPerRun, 1, 200, d.social.maxPostsPerRun)
+    },
+    voice: {
+      enabled: bool(voice.enabled, d.voice.enabled),
+      defaultDialect: oneOf(voice.defaultDialect, ["khaliji", "msa", "english"] as const, d.voice.defaultDialect)
+    },
+    seo: {
+      enabled: bool(seo.enabled, d.seo.enabled),
+      model: typeof seo.model === "string" && seo.model.trim() ? seo.model.trim() : d.seo.model,
+      residency: oneOf(seo.residency, ["global", "ksa", "eu"] as const, d.seo.residency)
+    }
+  };
+}
+
+/** Stored feature flags over the defaults; anything but an explicit false keeps a feature on. */
+export function normalizeFeatureSettings(stored: unknown): FeatureSettings {
+  const s = isObj(stored) ? stored : {};
+  return {
+    billing: s.billing !== false,
+    zatca: s.zatca !== false,
+    wathq: s.wathq !== false,
+    socialOAuth: s.socialOAuth !== false
+  };
+}
 
 const DEFAULT_FEATURES: FeatureSettings = {
   billing: true,
@@ -33,11 +82,11 @@ export async function getPlatformSetting<T>(key: string, fallback: T): Promise<T
 }
 
 export async function getAgentSettings(): Promise<AgentSettings> {
-  return getPlatformSetting("agents", DEFAULT_AGENTS);
+  return normalizeAgentSettings(await getPlatformSetting<unknown>("agents", DEFAULT_AGENTS));
 }
 
 export async function getFeatureSettings(): Promise<FeatureSettings> {
-  return getPlatformSetting("features", DEFAULT_FEATURES);
+  return normalizeFeatureSettings(await getPlatformSetting<unknown>("features", DEFAULT_FEATURES));
 }
 
 /** An admin kill switch under /admin/agents → Feature flags. */
@@ -115,8 +164,8 @@ export async function getAllPlatformSettings(): Promise<AllPlatformSettings> {
   if (error) throw new Error(`platform_settings read failed: ${error.message}`);
   const map = Object.fromEntries((data ?? []).map((r) => [r.key, r.value]));
   return {
-    agents: { ...DEFAULT_AGENTS, ...(map.agents as object) } as AgentSettings,
-    features: { ...DEFAULT_FEATURES, ...(map.features as object) } as FeatureSettings,
+    agents: normalizeAgentSettings(map.agents),
+    features: normalizeFeatureSettings(map.features),
     updatedAt: data?.find((r) => r.key === "agents")?.updated_at ?? null
   };
 }

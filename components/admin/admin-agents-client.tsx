@@ -108,20 +108,9 @@ export function AdminAgentsClient() {
             />
             Enabled
           </label>
-          <Field label="Cron interval (minutes)" hint="Hostinger hPanel cron should match this">
-            <Input
-              type="number"
-              min={5}
-              max={1440}
-              value={agents.social.cronMinutes}
-              onChange={(e) =>
-                setAgents({
-                  ...agents,
-                  social: { ...agents.social, cronMinutes: Number(e.target.value) || 15 }
-                })
-              }
-            />
-          </Field>
+          <p className="text-xs text-ink-mute">
+            Scheduler runs every 15 minutes (vercel.json on Vercel, scripts/hostinger-cron.sh on Hostinger).
+          </p>
           <Field label="Max posts per cron run">
             <Input
               type="number"

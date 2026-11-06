@@ -33,7 +33,6 @@ const PatchSchema = z.object({
       social: z
         .object({
           enabled: z.boolean(),
-          cronMinutes: z.number().int().min(5).max(1440),
           maxPostsPerRun: z.number().int().min(1).max(200)
         })
         .partial()
