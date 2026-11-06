@@ -10,7 +10,7 @@ const IntentResponseSchema = z.object({
   description: z.string().nullable(),
   publishableKey: z.string(),
   callbackUrl: z.string().url(),
-  metadata: z.record(z.string())
+  metadata: z.record(z.string(), z.string())
 });
 
 describe("employee billing intent response shape", () => {

@@ -8,7 +8,7 @@ export const runtime = "nodejs";
 
 const BodySchema = z.object({
   name: z.string().min(1).max(80).regex(/^[a-z0-9._-]+$/i),
-  props: z.record(z.unknown()).optional(),
+  props: z.record(z.string(), z.unknown()).optional(),
   sessionId: z.string().max(64).optional()
 });
 

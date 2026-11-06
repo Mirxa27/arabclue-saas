@@ -5,7 +5,7 @@ import { handleRouteError } from "@/lib/api/route-handler";
 import { confirmEmployeeBillingPayment } from "@/lib/billing/employee-billing";
 
 const BodySchema = z.object({
-  paymentId: z.string().uuid(),
+  paymentId: z.guid(),
   intentId: z.string().uuid()
 });
 

@@ -104,7 +104,7 @@ export const SallaWebhookEventSchema = z.object({
   event: z.string(), // e.g., "order.created", "app.installed"
   merchant: z.number().or(z.string()),
   created_at: z.string().optional(),
-  data: z.unknown()
+  data: z.unknown().optional()
 });
 
 export type SallaWebhookEvent = z.infer<typeof SallaWebhookEventSchema>;

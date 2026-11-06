@@ -12,13 +12,13 @@ export const MoyasarPaymentStatusSchema = z.enum([
 ]);
 
 export const MoyasarPaymentSchema = z.object({
-  id: z.string().uuid(),
+  id: z.guid(),
   status: MoyasarPaymentStatusSchema,
   amount: z.number().int().positive(),
   currency: z.string().length(3),
   description: z.string().optional().nullable(),
   callback_url: z.string().url().optional().nullable(),
-  metadata: z.record(z.string()).optional().nullable(),
+  metadata: z.record(z.string(), z.string()).optional().nullable(),
   created_at: z.string(),
   updated_at: z.string().optional()
 });
@@ -26,7 +26,7 @@ export const MoyasarPaymentSchema = z.object({
 export type MoyasarPayment = z.infer<typeof MoyasarPaymentSchema>;
 
 export const MoyasarWebhookEventSchema = z.object({
-  id: z.string().uuid(),
+  id: z.guid(),
   type: z.string(),
   created_at: z.string(),
   secret_token: z.string().optional(),

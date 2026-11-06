@@ -6,7 +6,7 @@ import { getServerSupabase } from "@/lib/db/supabase";
 const PatchSchema = z.object({
   scheduledFor: z.string().optional(),
   status: z.enum(["scheduled", "canceled"]).optional(),
-  copies: z.record(z.unknown()).optional(),
+  copies: z.record(z.string(), z.unknown()).optional(),
   hook: z.string().optional()
 });
 

@@ -33,7 +33,9 @@ function resolveModel(name?: string, residency: Residency = "global") {
       baseURL: process.env.HUMAIN_API_BASE,
       apiKey: process.env.HUMAIN_API_KEY ?? "",
     });
-    return humain(name ?? "allam-b2b");
+    // `.chat()` targets /chat/completions. The bare provider call defaults to
+    // OpenAI's Responses API, which OpenAI-compatible endpoints do not implement.
+    return humain.chat(name ?? "allam-b2b");
   }
 
   if (name?.startsWith("claude")) return anthropic(name);
@@ -52,7 +54,7 @@ export async function aiText(opts: AICallOptions): Promise<string> {
   return text;
 }
 
-export async function aiStructured<T extends z.ZodTypeAny>(
+export async function aiStructured<T extends z.ZodType>(
   schema: T,
   opts: AICallOptions
 ): Promise<z.infer<T>> {
@@ -63,7 +65,16 @@ export async function aiStructured<T extends z.ZodTypeAny>(
     system: opts.system,
     prompt: opts.prompt,
     temperature: opts.temperature ?? 0.4,
-    maxOutputTokens: opts.maxTokens ?? 1500
+    maxOutputTokens: opts.maxTokens ?? 1500,
+    // @ai-sdk/openai v3 enables OpenAI strict structured outputs by default, and
+    // strict mode rejects any schema whose optional/defaulted fields are absent
+    // from `required` (ToolDecisionSchema, VisualBriefSchema, ReplyDecisionSchema).
+    // Non-strict JSON-schema mode keeps the schema as guidance; the SDK still
+    // validates the result against the zod schema before returning it.
+    providerOptions: { openai: { strictJsonSchema: false } }
   });
-  return object;
+  // generateObject has already validated `object` against `schema` (safeParse in
+  // @ai-sdk/provider-utils); TS just cannot relate the SDK's deferred
+  // InferSchema<T> to zod 4's conditional output<T>.
+  return object as z.infer<T>;
 }

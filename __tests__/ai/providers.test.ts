@@ -7,7 +7,11 @@ const mocks = vi.hoisted(() => ({
   generateText: vi.fn(async (_opts: Record<string, unknown>) => ({ text: "hello world" })),
   generateObject: vi.fn(async (_opts: Record<string, unknown>) => ({ object: { ok: true } })),
   openai: vi.fn((id: string) => ({ provider: "openai", id })),
-  createOpenAI: vi.fn((cfg: Record<string, unknown>) => (id: string) => ({ provider: "humain", id, cfg })),
+  createOpenAI: vi.fn((cfg: Record<string, unknown>) =>
+    Object.assign((id: string) => ({ provider: "humain-responses", id, cfg }), {
+      chat: (id: string) => ({ provider: "humain-chat", id, cfg })
+    })
+  ),
   anthropic: vi.fn((id: string) => ({ provider: "anthropic", id }))
 }));
 
@@ -56,6 +60,12 @@ describe("aiStructured", () => {
     expect(arg.schema).toBe(schema);
     expect(arg.maxOutputTokens).toBe(800);
   });
+
+  it("disables OpenAI strict mode so optional schema fields are accepted", async () => {
+    await aiStructured(z.object({ a: z.string(), b: z.string().optional() }), { prompt: "x" });
+    const arg = mocks.generateObject.mock.calls[0][0] as { providerOptions?: { openai?: { strictJsonSchema?: boolean } } };
+    expect(arg.providerOptions?.openai?.strictJsonSchema).toBe(false);
+  });
 });
 
 describe("PDPL residency routing", () => {
@@ -70,6 +80,9 @@ describe("PDPL residency routing", () => {
     expect(mocks.createOpenAI).toHaveBeenCalledWith(
       expect.objectContaining({ baseURL: "https://humain.local/v1", apiKey: "k" })
     );
+    // OpenAI-compatible endpoints speak Chat Completions, not the Responses API.
+    const arg = mocks.generateText.mock.calls[0][0] as { model: { provider: string; id: string } };
+    expect(arg.model).toMatchObject({ provider: "humain-chat", id: "allam-b2b" });
     expect(mocks.anthropic).not.toHaveBeenCalled();
   });
 });

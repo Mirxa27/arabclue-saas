@@ -1,25 +1,11 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { z } from "zod";
+import { TaskCreateSchema, TaskUpdateSchema } from "@/lib/employees/task-schemas";
 import { requireMerchant } from "@/lib/auth/session";
 import { getServerSupabase } from "@/lib/db/supabase";
 import { handleRouteError } from "@/lib/api/route-handler";
 
 export const dynamic = "force-dynamic";
 
-const TaskCreateSchema = z.object({
-  title: z.string().min(2).max(200),
-  description: z.string().max(2000).optional().nullable(),
-  priority: z.enum(["low", "normal", "high", "urgent"]).default("normal"),
-  due_at: z.string().datetime().optional().nullable()
-});
-
-const TaskUpdateSchema = z.object({
-  id: z.string().uuid(),
-  status: z.enum(["todo", "in_progress", "blocked", "done", "canceled"]).optional(),
-  priority: z.enum(["low", "normal", "high", "urgent"]).optional(),
-  title: z.string().min(2).max(200).optional(),
-  description: z.string().max(2000).optional().nullable()
-});
 
 async function assertEmployeeOwned(id: string): Promise<string> {
   const merchant = await requireMerchant();

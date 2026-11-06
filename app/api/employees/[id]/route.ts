@@ -19,13 +19,13 @@ const UpdateSchema = z.object({
       mode: z.enum(["always", "business_hours", "custom"]),
       start: z.string().regex(/^\d{2}:\d{2}$/),
       end: z.string().regex(/^\d{2}:\d{2}$/),
-      days: z.array(z.number().int().min(0).max(6))
+      days: z.array(z.number().int().min(0).max(6)).max(7)
     })
     .optional(),
   knowledge: z.string().max(8000).optional().nullable(),
   goals: z.array(z.string().min(1).max(200)).max(8).optional(),
   status: z.enum(["active", "paused", "offboarded"]).optional(),
-  config: z.record(z.unknown()).optional()
+  config: z.record(z.string(), z.unknown()).optional()
 });
 
 async function fetchEmployeeOwned(id: string): Promise<AIEmployeeRow> {

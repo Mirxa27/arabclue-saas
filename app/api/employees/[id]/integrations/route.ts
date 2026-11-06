@@ -50,8 +50,8 @@ const KIND_VALUES = [
 const ConnectSchema = z.object({
   kind: z.enum(KIND_VALUES),
   external_id: z.string().max(200).optional().nullable(),
-  credentials: z.record(z.unknown()).default({}),
-  config: z.record(z.unknown()).default({})
+  credentials: z.record(z.string(), z.unknown()).default({}),
+  config: z.record(z.string(), z.unknown()).default({})
 });
 
 async function assertEmployeeOwned(id: string): Promise<string> {

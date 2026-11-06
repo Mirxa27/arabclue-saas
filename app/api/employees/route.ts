@@ -21,13 +21,13 @@ const HireSchema = z.object({
       mode: z.enum(["always", "business_hours", "custom"]),
       start: z.string().regex(/^\d{2}:\d{2}$/),
       end: z.string().regex(/^\d{2}:\d{2}$/),
-      days: z.array(z.number().int().min(0).max(6))
+      days: z.array(z.number().int().min(0).max(6)).max(7)
     })
     .default({ mode: "always", start: "00:00", end: "23:59", days: [0, 1, 2, 3, 4, 5, 6] }),
   knowledge: z.string().max(8000).optional().nullable(),
   goals: z.array(z.string().min(1).max(200)).max(8).default([]),
   hire_plan: z.enum(["starter", "growth", "pro", "scale"]).default("starter"),
-  config: z.record(z.unknown()).optional()
+  config: z.record(z.string(), z.unknown()).optional()
 });
 
 // ── GET /api/employees — list hired employees for the merchant ───────────────

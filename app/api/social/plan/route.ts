@@ -17,7 +17,7 @@ export const maxDuration = 300;
 const RequestSchema = z.object({
   horizonDays: z.number().min(7).max(60).default(30),
   postsPerWeek: z.number().min(1).max(14).default(5),
-  platforms: z.array(z.enum(["instagram", "tiktok", "x", "snapchat", "linkedin", "whatsapp"])).optional()
+  platforms: z.array(z.enum(["instagram", "tiktok", "x", "snapchat", "linkedin", "whatsapp"])).max(6).optional()
 });
 
 function toProduct(p: SallaProduct): Product {

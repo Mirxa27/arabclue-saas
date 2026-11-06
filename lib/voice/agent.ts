@@ -142,7 +142,7 @@ export const VOICE_TOOLS = [
 // ── Tool dispatcher (server side) ────────────────────────────────────────────
 export const ToolCallSchema = z.object({
   name: z.enum(["lookup_order", "check_product", "book_appointment", "escalate_to_human"]),
-  arguments: z.record(z.unknown())
+  arguments: z.record(z.string(), z.unknown())
 });
 
 export type VoiceToolContext = {
