@@ -16,7 +16,7 @@
  * default retention 30 days, and prefer in-Kingdom storage for production.
  */
 import { z } from "zod";
-import { sallaAPI } from "@/lib/salla/oauth";
+import { sallaApiForMerchant } from "@/lib/salla/tokens";
 import { getPersona } from "@/lib/agents/personas";
 import { SallaOrdersResponseSchema, SallaProductsResponseSchema } from "@/lib/types/salla";
 
@@ -147,7 +147,13 @@ export const ToolCallSchema = z.object({
 
 export type VoiceToolContext = {
   merchantId: string;
-  accessToken: string; // Salla token for this merchant
+  /**
+   * @deprecated Ignored. Stored Salla tokens are encrypted and refreshed on demand: tool calls
+   * resolve the merchant's token through getSallaAccessToken (lib/salla/tokens.ts).
+   */
+  accessToken?: string | null;
+  /** Salla Merchant API GET for this merchant (default: sallaApiForMerchant — refresh + 401 retry). */
+  salla?: (path: string) => Promise<unknown>;
   persona: VoicePersona;
   // injected side-effect deps so this stays testable
   recordBooking: (b: { name: string; mobile: string; preferredTime: string; note?: string }) => Promise<string>;
@@ -158,17 +164,18 @@ export async function dispatchVoiceTool(
   call: z.infer<typeof ToolCallSchema>,
   ctx: VoiceToolContext
 ): Promise<{ output: string }> {
+  const salla = ctx.salla ?? ((path: string) => sallaApiForMerchant<unknown>(ctx.merchantId, path));
   switch (call.name) {
     case "lookup_order": {
       const { orderNumber, mobile } = call.arguments as { orderNumber?: string; mobile?: string };
       if (!orderNumber && !mobile) return { output: "أحتاج رقم الطلب أو رقم الجوال للبحث." };
       try {
         const q = orderNumber ? `?reference_id=${encodeURIComponent(orderNumber)}` : `?phone=${encodeURIComponent(mobile!)}`;
-        const res = await sallaAPI<unknown>(`/orders${q}`, ctx.accessToken);
+        const res = await salla(`/orders${q}`);
         const parsed = SallaOrdersResponseSchema.parse(res);
         const order = parsed.data?.[0];
         if (!order) return { output: "ما لقيت طلباً بهالبيانات. تأكد من الرقم لو سمحت." };
-        return { output: `حالة الطلب: ${order.status?.name ?? "غير معروف"}. ${order.shipment ? "الشحنة في الطريق." : ""}` };
+        return { output: `حالة الطلب: ${order.status?.name ?? "غير معروف"}.` };
       } catch {
         return { output: "صار خطأ بسيط بالتحقق. أحوّلك لزميل بشري إذا تحب." };
       }
@@ -176,7 +183,7 @@ export async function dispatchVoiceTool(
     case "check_product": {
       const { query } = call.arguments as { query: string };
       try {
-        const res = await sallaAPI<unknown>(`/products?keyword=${encodeURIComponent(query)}`, ctx.accessToken);
+        const res = await salla(`/products?keyword=${encodeURIComponent(query)}`);
         const parsed = SallaProductsResponseSchema.parse(res);
         const p = parsed.data?.[0];
         if (!p) return { output: `ما لقيت «${query}» حالياً. تحب أبحث باسم ثاني؟` };

@@ -1,0 +1,232 @@
+{
+  "event": "order.status.updated",
+  "merchant": 193718979,
+  "created_at": "Wed Aug 17 2022 23:59:38 GMT+0300",
+  "data": {
+    "id": 198290473,
+    "status": "تم التنفيذ",
+    "customized": null,
+    "note": "تم إرسال تفاصيل الطلب  إلى بريد العميل",
+    "created_at": {
+      "date": "2022-08-17 23:59:38.000000",
+      "timezone_type": 3,
+      "timezone": "Asia/Riyadh"
+    },
+    "order": {
+      "id": 629263027,
+      "reference_id": 42264,
+      "urls": {
+        "customer": "https://web-f71c00b38eb7308ff0ec2198afc21531.salla.group/test/order/P4GV9LQN3veZl1PV6AWBR6rJ5kzEoxYd",
+        "admin": "https://dashboard-f71c00b38eb7308ff0ec2198afc21531.salla.group/orders/order/P4GV9LQN3veZl1PV6AWBR6rJ5kzEoxYd",
+        "rating": "https://store-test.com/rating-link",
+        "checkout": "https://store-test.com/checkout"
+      },
+      "date": {
+        "date": "2022-08-17 20:59:36.000000",
+        "timezone_type": 3,
+        "timezone": "Asia/Riyadh"
+      },
+      "source": "store",
+      "source_device": "desktop",
+      "source_details": {
+        "type": "direct",
+        "value": null,
+        "device": "desktop",
+        "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/102.0.5005.115 Safari/537.36",
+        "ip": null
+      },
+      "first_complete_at": {
+        "date": "2022-08-17 23:59:36.000000",
+        "timezone_type": 3,
+        "timezone": "Asia/Riyadh"
+      },
+      "status": {
+        "id": 1298199463,
+        "name": "تم التنفيذ",
+        "slug": "completed"
+      },
+      "payment_method": "cod",
+      "currency": "SAR",
+      "amounts": {
+        "sub_total": {
+          "amount": 246,
+          "currency": "SAR"
+        },
+        "shipping_cost": {
+          "amount": 33,
+          "currency": "SAR"
+        },
+        "cash_on_delivery": {
+          "amount": 1,
+          "currency": "SAR"
+        },
+        "tax": {
+          "percent": "0.00",
+          "amount": {
+            "amount": 0,
+            "currency": "SAR"
+          }
+        },
+        "discounts": [
+          {
+            "title": "منتج مجاني: عطر إترنتي مومنت من كالفن كلاين للنساء، او دي بارفان، 100 مل",
+            "type": "loyalty_prize",
+            "code": "FREE_PRODUCT",
+            "discount": "126.00",
+            "currency": "SAR"
+          }
+        ],
+        "total": {
+          "amount": 154,
+          "currency": "SAR"
+        }
+      },
+      "shipping": {
+        "id": 147641223,
+        "app_id": "618297749",
+        "company": "محمول",
+        "logo": "https://cdn.salla.sa/jKxK/y1fgSXdUBbKwKXb6jE3dbmx8zDozt5KuQJ9McXX9.png",
+        "receiver": {
+          "name": "User Name",
+          "email": "test@user.name",
+          "phone": "96652318526"
+        },
+        "shipper": {
+          "name": "Mohammed Test",
+          "company_name": "Test",
+          "email": "Test@salla.sa",
+          "phone": "96652318526"
+        },
+        "pickup_address": {
+          "country": "السعودية",
+          "country_code": "SA",
+          "city": "المدينة المنورة",
+          "shipping_address": "Macca,Macca,1111, Macca, المدينة المنورة,السعودية",
+          "street_number": "Macca",
+          "block": "Macca",
+          "postal_code": "1111",
+          "geo_coordinates": {
+            "lat": 24.45196726,
+            "lng": 39.587448815
+          }
+        },
+        "address": {
+          "country": "SA",
+          "country_code": "SA",
+          "city": "الرياض",
+          "shipping_address": " شارع Macca، الحي Macca 1111،, Macca,, الرياض, السعودية",
+          "street_number": "Macca",
+          "block": "Macca",
+          "postal_code": "1111",
+          "geo_coordinates": {
+            "lat": 0,
+            "lng": 0
+          }
+        },
+        "shipment": {
+          "id": "SALLA000121",
+          "pickup_id": "SALLA000121001",
+          "tracking_link": "SALLA000121",
+          "label": []
+        },
+        "policy_options": {
+          "return_police": "0",
+          "restore_items": "1",
+          "refund_loyalty_prize_points": "on",
+          "send_status_sms": true,
+          "companyServiceType": "",
+          "boxes": "1"
+        }
+      },
+      "can_cancel": false,
+      "show_weight": false,
+      "can_reorder": false,
+      "is_pending_payment": false,
+      "pending_payment_ends_at": 0,
+      "total_weight": "١ كجم",
+      "type": "normal",
+      "shipment_branch": [
+        {
+          "id": 2019138561,
+          "name": "الرئيسي",
+          "status": "active",
+          "is_default": true,
+          "type": {}
+        }
+      ],
+      "customer": {
+        "id": 1779795066,
+        "name": "Test Salla",
+        "mobile": "+96652318526",
+        "email": "Test.2022@salla.sa",
+        "avatar": "https://dashboard-f71c00b38eb7308ff0ec2198afc21531.salla.group/cp/assets/images/avatar_male.png",
+        "country": "السعودية",
+        "city": "الرياض"
+      },
+      "items": [
+        {
+          "id": 2105258904,
+          "product_id": 2047473815,
+          "name": "سي كيه وان شوك من كالفن كلاين، فور هي، 100 مل",
+          "sku": "",
+          "quantity": 1,
+          "weight": 0.5,
+          "amounts": {
+            "price_without_tax": {
+              "amount": 120,
+              "currency": "SAR"
+            },
+            "total_discount": {
+              "amount": 0,
+              "currency": "SAR"
+            },
+            "tax": {
+              "percent": "0.00",
+              "amount": {
+                "amount": 0,
+                "currency": "SAR"
+              }
+            },
+            "total": {
+              "amount": 120,
+              "currency": "SAR"
+            }
+          }
+        },
+        {
+          "id": 1329648281,
+          "product_id": 674027926,
+          "name": "عطر إترنتي مومنت من كالفن كلاين للنساء، او دي بارفان، 100 مل",
+          "sku": "",
+          "quantity": 1,
+          "weight": 0.5,
+          "amounts": {
+            "price_without_tax": {
+              "amount": 126,
+              "currency": "SAR"
+            },
+            "total_discount": {
+              "amount": 126,
+              "currency": "SAR"
+            },
+            "tax": {
+              "percent": "0.00",
+              "amount": {
+                "amount": 0,
+                "currency": "SAR"
+              }
+            },
+            "total": {
+              "amount": 126,
+              "currency": "SAR"
+            }
+          }
+        }
+      ],
+      "total": {
+        "amount": 154,
+        "currency": "SAR"
+      }
+    }
+  }
+}

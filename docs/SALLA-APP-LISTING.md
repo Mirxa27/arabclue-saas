@@ -104,12 +104,29 @@ Salla collects in SAR and remits net of platform fees.
 
 ---
 
+## Connection model (what reviewers and merchants see)
+
+Published Salla apps must use **Easy Mode** OAuth ([docs.salla.dev/doc-421118](https://docs.salla.dev/doc-421118)):
+
+1. The merchant installs arabclue from the Salla App Store.
+2. Salla sends the tokens to `https://arabclue.com/api/salla/webhook` as `app.store.authorize`. arabclue
+   stores them encrypted and notes the email of the Salla user who installed the app
+   (`accounts.salla.sa/oauth2/user/info`).
+3. The merchant signs in to arabclue with **the same email** → **Integrations** shows "We found an arabclue
+   install on a Salla store made with your account's email" → **Link this store**. Only the store owner
+   (not a store team member) can link it this way, within 30 days of installing.
+4. Uninstalling the app in Salla disconnects it; reinstalling reconnects the same arabclue account.
+
+Required app settings: Easy Mode, webhook URL above, events `app.store.authorize`, `app.installed`,
+`app.uninstalled`, `order.created`, scope `offline_access` (refresh tokens).
+
 ## Reviewer access
 
 In the submission form, provide:
 - Demo store URL (you spin up a test Salla store)
-- Demo merchant email + sign-in instructions for arabclue
-- Walk-through video (Loom, ≤3 min) showing: install → connect → first generated post
+- Demo merchant email + sign-in instructions for arabclue — install the app on the demo store **with the
+  same email** so the reviewer can link it from Integrations
+- Walk-through video (Loom, ≤3 min) showing: install → link the store on Integrations → first generated post
 
 ---
 

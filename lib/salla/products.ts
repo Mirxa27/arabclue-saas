@@ -3,7 +3,7 @@
  * Normalizes Salla's product shape into our internal `Product` type used by the
  * social agent, SEO engine, and voice agent.
  */
-import { sallaAPI } from "./oauth";
+import { sallaApiForMerchant } from "./tokens";
 import type { Product } from "@/lib/social/types";
 
 type SallaProductRaw = {
@@ -41,21 +41,21 @@ export function normalizeProduct(p: SallaProductRaw): Product {
   };
 }
 
-/** Fetch one page of products. */
-export async function fetchProductsPage(accessToken: string, page = 1, perPage = 50) {
-  const res = await sallaAPI<SallaListResponse>(`/products?page=${page}&per_page=${perPage}`, accessToken);
+/** Fetch one page of a merchant's products (token resolved and refreshed by lib/salla/tokens.ts). */
+export async function fetchProductsPage(merchantId: string, page = 1, perPage = 50) {
+  const res = await sallaApiForMerchant<SallaListResponse>(merchantId, `/products?page=${page}&per_page=${perPage}`);
   return {
     products: (res.data ?? []).map(normalizeProduct),
     pagination: res.pagination
   };
 }
 
-/** Fetch the full catalog, paginating until exhausted (capped for safety). */
-export async function fetchAllProducts(accessToken: string, maxPages = 20): Promise<Product[]> {
+/** Fetch the merchant's full catalog, paginating until exhausted (capped for safety). */
+export async function fetchAllProducts(merchantId: string, maxPages = 20): Promise<Product[]> {
   const all: Product[] = [];
   let page = 1;
   while (page <= maxPages) {
-    const { products, pagination } = await fetchProductsPage(accessToken, page);
+    const { products, pagination } = await fetchProductsPage(merchantId, page);
     all.push(...products);
     if (!pagination || page >= pagination.totalPages) break;
     page += 1;
