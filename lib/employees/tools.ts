@@ -12,6 +12,8 @@
 import { z } from "zod";
 import { aiStructured } from "@/lib/ai/providers";
 import { getServiceSupabase } from "@/lib/db/supabase";
+import { SallaApiError } from "@/lib/salla/oauth";
+import { sallaApiForMerchant, SallaConnectionError } from "@/lib/salla/tokens";
 import type {
   AIEmployeeIntegrationRow,
   AIEmployeeRow,
@@ -245,25 +247,21 @@ async function execLookupSallaOrder(
 ): Promise<ToolExecutionResult> {
   if (!d.salla_order_id) return { ok: false, tool: "lookup_salla_order", error: "salla_order_id required" };
 
-  // The merchant-level Salla token lives on the merchants table; the employee
-  // shares that connection rather than holding its own.
-  const sb = getServiceSupabase();
-  const { data: merchant } = await sb
-    .from("merchants")
-    .select("access_token, store_url")
-    .eq("id", emp.merchant_id)
-    .maybeSingle();
-  const token = (merchant as { access_token?: string } | null)?.access_token;
-  if (!token) return { ok: false, tool: "lookup_salla_order", error: "Salla not connected on merchant" };
-
-  const res = await fetch(`https://api.salla.dev/admin/v2/orders/${encodeURIComponent(d.salla_order_id)}`, {
-    headers: { authorization: `Bearer ${token}`, accept: "application/json" }
-  });
-  if (!res.ok) {
-    return { ok: false, tool: "lookup_salla_order", error: `Salla ${res.status}` };
+  // The merchant-level Salla connection lives on the merchants table (encrypted, refreshed on
+  // demand); the employee shares it rather than holding its own.
+  try {
+    const j = await sallaApiForMerchant<Record<string, unknown>>(
+      emp.merchant_id,
+      `/orders/${encodeURIComponent(d.salla_order_id)}`
+    );
+    return { ok: true, tool: "lookup_salla_order", output: j };
+  } catch (err) {
+    if (err instanceof SallaConnectionError) {
+      return { ok: false, tool: "lookup_salla_order", error: err.code === "salla_not_connected" ? "Salla not connected on merchant" : err.message };
+    }
+    if (err instanceof SallaApiError) return { ok: false, tool: "lookup_salla_order", error: `Salla ${err.status}` };
+    throw err;
   }
-  const j = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-  return { ok: true, tool: "lookup_salla_order", output: j };
 }
 
 async function execCreateInvoice(emp: AIEmployeeRow, d: ToolDecision): Promise<ToolExecutionResult> {

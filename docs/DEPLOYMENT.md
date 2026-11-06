@@ -52,7 +52,7 @@ Minimum bootstrap for first boot:
 | `NEXT_PUBLIC_SITE_URL` | Admin → Config |
 | `OPENAI_API_KEY`, `MOYASAR_*`, `SALLA_*`, OAuth apps, etc. | Admin → Config |
 | `CRON_SECRET` | Admin → Config |
-| `NEXT_PUBLIC_SALLA_INSTALL_URL` | Admin → Config (rebuild if changed) |
+| `NEXT_PUBLIC_SALLA_INSTALL_URL` | Admin → Config → Salla (dashboard "Connect Salla" in Easy Mode reads it at runtime; marketing CTAs need a rebuild) |
 | `TWILIO_*`, `SENTRY_DSN`, `UPSTASH_*` | Admin → Config (optional) |
 | `TRUSTED_PROXY_HOPS` | hPanel or Admin → Config (optional, default `1` — see §1.8) |
 
@@ -92,8 +92,8 @@ bash scripts/hostinger-post-deploy.sh
 | Service | URL |
 |---------|-----|
 | Moyasar | `https://arabclue.com/api/billing/webhook` |
-| Salla OAuth | `https://arabclue.com/api/salla/oauth/callback` |
-| Salla webhooks | `https://arabclue.com/api/salla/webhook` |
+| Salla OAuth (Custom Mode redirect URL) | `https://arabclue.com/api/salla/oauth/callback` (flow starts at `/api/salla/oauth/start`) |
+| Salla webhooks (incl. Easy Mode `app.store.authorize`) | `https://arabclue.com/api/salla/webhook` |
 | Meta (IG / WhatsApp) | `https://arabclue.com/api/meta/webhook` |
 | AI employee WhatsApp (per hire) | `https://arabclue.com/api/employees/webhooks/whatsapp/{employeeId}` |
 | AI employee Telegram (per hire) | `https://arabclue.com/api/employees/webhooks/telegram/{employeeId}` |
@@ -206,6 +206,15 @@ If you used a free-tier project for development, upgrade to **Pro** before hitti
 
 ## 4. Salla App publishing
 
+0. Before submitting:
+   - Apply migration `20261106003000_salla_connect.sql` (pending installs, refresh lease).
+   - Switch the app to **Easy Mode** — Salla allows only Easy Mode for published apps
+     ([docs](https://docs.salla.dev/doc-421118)).
+   - Subscribe the webhook to `app.store.authorize`, `app.installed`, `app.uninstalled` and `order.created`.
+   - In Admin → Config set `SALLA_CLIENT_ID`, `SALLA_CLIENT_SECRET`, `SALLA_WEBHOOK_SECRET` and
+     `NEXT_PUBLIC_SALLA_INSTALL_URL` (`https://s.salla.sa/apps/install/<app-id>`). Once the install link is set,
+     "Connect Salla" opens the App Store instead of the in-app (Custom Mode) flow. Merchants then link the
+     install from **Integrations → Link this store**, signed in with the same email they use on Salla.
 1. In **Salla Partners → Apps → Your App → Submit for Review**.
 2. Required materials (see [SALLA-APP-LISTING.md](./SALLA-APP-LISTING.md)):
    - 5 screenshots (Arabic UI)

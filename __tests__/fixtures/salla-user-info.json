@@ -1,0 +1,25 @@
+{
+  "status": 200,
+  "success": true,
+  "data": {
+    "id": 1689171978,
+    "name": "Test User",
+    "email": "test@gmail.com",
+    "mobile": "+96652318526",
+    "role": "user",
+    "created_at": "2021-03-27 21:51:56",
+    "merchant": {
+      "id": 847769313,
+      "username": "User_name123",
+      "name": "User Name",
+      "avatar": "https://i.ibb.co/jyqRQfQ/avatar-male.webp",
+      "store_location": "21.589481104199123,39.67869125586653",
+      "plan": "pro",
+      "status": "active",
+      "domain": "https://www.domain.com",
+      "tax_number": "424243241321234",
+      "commercial_number": "3552100509",
+      "created_at": "2021-12-31 12:59:59"
+    }
+  }
+}

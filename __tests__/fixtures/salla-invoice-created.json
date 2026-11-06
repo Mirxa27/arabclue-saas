@@ -1,0 +1,111 @@
+{
+  "id": 500681815,
+  "invoice_number": "633544",
+  "uuid": "39273ccf-ee77-4ca1-8df9-c93526ee17eb",
+  "order_id": 1783506836,
+  "invoice_reference_id": null,
+  "type": "Tax Invoice",
+  "date": "2025-05-19 12:05:05",
+  "qr_code": null,
+  "payment_method": "credit_card",
+  "sub_total": {
+    "amount": 834.76,
+    "currency": "SAR"
+  },
+  "shipping_cost": {
+    "amount": 0,
+    "taxable": true,
+    "currency": "SAR"
+  },
+  "cod_cost": {
+    "amount": 0,
+    "taxable": true,
+    "currency": "SAR"
+  },
+  "discount": {
+    "amount": 41.74,
+    "currency": "SAR"
+  },
+  "tax": {
+    "percent": 15,
+    "amount": {
+      "amount": 118.95,
+      "currency": "SAR"
+    }
+  },
+  "total": {
+    "amount": 911.97,
+    "currency": "SAR"
+  },
+  "shipping_cost_discount": {
+    "amount": 0,
+    "currency": "SAR"
+  },
+  "items": [
+    {
+      "id": 87236180,
+      "item_id": 1114617540,
+      "product_id": 515303061,
+      "name": "زيت زيتون بكر قطفة أولى 4لتر",
+      "sku": "PRO-001",
+      "quantity": 4,
+      "type": "product",
+      "price": {
+        "amount": 208.69,
+        "currency": "SAR"
+      },
+      "discount": {
+        "amount": 41.74,
+        "currency": "SAR"
+      },
+      "tax": {
+        "percent": 15,
+        "amount": {
+          "amount": 118.95,
+          "currency": "SAR"
+        }
+      },
+      "total": {
+        "amount": 911.97,
+        "currency": "SAR"
+      }
+    }
+  ],
+"company": {
+ "name": "my company",
+ "tax_number": "311111231231233",
+ "commercial_number": "1233212235"
+},
+  "customer": {
+    "id": 396470115,
+    "first_name": "بدر",
+    "last_name": "المطيري",
+    "mobile": 555317835,
+    "mobile_code": "+966",
+    "email": "Abubadr512@gmail.com",
+    "avatar": "https://cdn.assets.salla.network/prod/admin/cp/assets/images/avatar_male.png",
+    "gender": "male",
+    "birthday": {
+      "date": "1980-08-12 00:00:00.000000",
+      "timezone_type": 3,
+      "timezone": "Asia/Riyadh"
+    },
+    "country_code": "SA",
+    "currency": "SAR",
+    "updated_at": {
+      "date": "2025-05-19 12:01:31.000000",
+      "timezone_type": 3,
+      "timezone": "Asia/Riyadh"
+    },
+    "address": {
+      "country": "السعودية",
+      "city": "المدينة المنورة",
+      "district": null,
+      "street_name": "شاكر بن مكي",
+      "additional_number": null,
+      "building_number": null,
+      "postal_code": "42251",
+      "description": "بعد سوبرماركت الريم"
+    }
+  }
+}

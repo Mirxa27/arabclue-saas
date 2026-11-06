@@ -151,25 +151,52 @@ HUMAIN_API_KEY=...
 
 1. Sign in at [salla.partners](https://salla.partners/).
 2. **Apps → Create App** → choose **Custom App** for testing or **Public App** when you're ready to list.
-3. Set **Redirect URL** to `https://<your-domain>/api/salla/oauth/callback` (or `http://localhost:3000/api/salla/oauth/callback` for dev).
+3. Pick the OAuth mode under **App Keys** ([docs](https://docs.salla.dev/doc-421118)):
+   - **Easy Mode** — the only mode Salla allows for apps published on the App Store. Salla sends the
+     tokens to the webhook as `app.store.authorize`; no redirect URL is involved.
+   - **Custom Mode** — for development/testing. Set **Redirect URL** to
+     `https://<your-domain>/api/salla/oauth/callback` (or `http://localhost:3000/api/salla/oauth/callback`).
 4. **Permissions/Scopes** required:
-   - `offline_access`
+   - `offline_access` (refresh tokens)
    - `products.read`
    - `orders.read`
    - `orders.read_write` (if you'll mirror invoice IDs back)
    - `settings.read`
-5. Copy **Client ID** + **Client Secret** + **Webhook Secret** into `.env.local`.
+5. Copy **Client ID** + **Client Secret** + **Webhook Secret** into `.env.local` (`SALLA_CLIENT_ID`,
+   `SALLA_CLIENT_SECRET`, `SALLA_WEBHOOK_SECRET`). Custom Mode also needs `SALLA_REDIRECT_URI`; Easy Mode
+   needs the App Store install link in `NEXT_PUBLIC_SALLA_INSTALL_URL`
+   (`https://s.salla.sa/apps/install/<app-id>`). In production set them in **Admin → Config**.
 
-### 5.2 Webhooks
+### 5.2 How a store gets connected
+
+| Path | What happens |
+|---|---|
+| **Integrations → Connect Salla** without `NEXT_PUBLIC_SALLA_INSTALL_URL` (Custom Mode; needs `SALLA_REDIRECT_URI`) | `GET /api/salla/oauth/start` (signed-in merchant only) → Salla consent → `/api/salla/oauth/callback`. The callback checks the signed state, the `ac_oauth_salla` browser cookie and that the signed-in merchant started the flow, then links the store. |
+| **Install from the Salla App Store** (Easy Mode; "Connect Salla" opens `NEXT_PUBLIC_SALLA_INSTALL_URL` when it is set) | Salla posts `app.store.authorize` to the webhook. If the store is already linked, its tokens are replaced; otherwise they are parked (encrypted) in `salla_installs` with the installing Salla user's email from `accounts.salla.sa/oauth2/user/info`. The merchant signs in to arabclue with the **same email** and clicks **Link this store** on the Integrations page. Only the store owner (Salla role `user`), with a confirmed email, within 30 days can claim it — never by a store id from the browser alone. |
+
+A Salla store belongs to at most one arabclue merchant (`store_already_linked` otherwise).
+
+Tokens are stored encrypted (`TOKEN_ENCRYPTION_KEY`) and only ever read through
+`getSallaAccessToken` (`lib/salla/tokens.ts`): it refreshes 10 minutes before expiry and after a 401.
+Salla refresh tokens are **single-use** (re-using one revokes the whole install), so one worker per
+merchant refreshes under a database lease and stores the rotated pair with a compare-and-swap. If
+Salla rejects the refresh token (`invalid_grant`) the Integrations page shows **Reconnect Salla**.
+Refresh tokens expire after one month without use.
+
+### 5.3 Webhooks
 
 Configure these to point at `https://<your-domain>/api/salla/webhook`:
 
+- `app.store.authorize` (Easy Mode tokens — required for App Store installs)
 - `app.installed`
-- `app.uninstalled`
-- `order.created`
+- `app.uninstalled` (clears the store's tokens; reinstalling reconnects the same merchant)
+- `order.created` (ZATCA invoice — the order is mapped from Salla's documented payload and must
+  reconcile with `amounts.total`; orders that don't are logged as `salla.order.unmapped`, not invoiced)
 - `order.updated`
 
-Salla signs every payload with HMAC-SHA256; the secret is `SALLA_WEBHOOK_SECRET`.
+Salla signs every payload with HMAC-SHA256 (`x-salla-signature`); the secret is `SALLA_WEBHOOK_SECRET`.
+Without it the webhook answers 503. Token fields are stripped before any payload is written to the
+events log.
 
 ---
 
@@ -221,7 +248,8 @@ npm run dev
 Test flows:
 1. Open `/signup` → check inbox → click magic link → land on `/welcome`.
 2. Complete the 4-step wizard → land on `/dashboard`.
-3. Click **Integrations → Connect Salla** → OAuth round-trip → return to `/dashboard?installed=1`.
+3. Click **Integrations → Connect Salla** → OAuth round-trip → `/integrations/callback?platform=salla&status=success`
+   → back on **Integrations** with Salla connected (Custom Mode; see §5.2 for App Store installs).
 4. Go to **Brand Kit** → fill it in → save.
 5. Go to **Social Calendar** → click **Generate plan** → 30-day grid appears.
 

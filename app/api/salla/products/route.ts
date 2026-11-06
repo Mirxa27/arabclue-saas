@@ -1,63 +1,41 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireUserApi, getCurrentMerchant } from "@/lib/auth/session";
+import { requireMerchantApi } from "@/lib/auth/session";
 import { getServerSupabase } from "@/lib/db/supabase";
-import { sallaAPI } from "@/lib/salla/oauth";
 import { handleRouteError } from "@/lib/api/route-handler";
-import { SallaProductsResponseSchema } from "@/lib/types/salla";
+import { enforceRateLimit } from "@/lib/security/rate-limit";
+import { sallaApiForMerchant, SallaConnectionError } from "@/lib/salla/tokens";
+import { syncSallaProducts } from "@/lib/salla/products-sync";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
 
-export async function POST(_req: NextRequest) {
+const ROUTE = "POST /api/salla/products";
+
+/**
+ * Pull the merchant's Salla catalog into salla_products. 409 salla_not_connected /
+ * salla_reconnect_required when there is no usable connection; 500 when a write fails.
+ */
+export async function POST(req: NextRequest) {
   try {
-    await requireUserApi();
-    const merchant = await getCurrentMerchant();
-    if (!merchant?.access_token) {
-      return NextResponse.json({ error: "salla not connected" }, { status: 400 });
-    }
+    const merchant = await requireMerchantApi();
 
-    const supabase = await getServerSupabase();
-    let page = 1;
-    let totalSynced = 0;
-    const limit = 50;
+    const limited = await enforceRateLimit(req, "salla:products-sync", 6, 10 * 60_000, merchant.id);
+    if (limited instanceof NextResponse) return limited;
 
-    while (page <= 20) {
-      const resp = await sallaAPI<unknown>(`/products?per_page=${limit}&page=${page}`, merchant.access_token);
-      const parsed = SallaProductsResponseSchema.parse(resp);
-      const items = parsed.data ?? [];
-      if (items.length === 0) break;
+    const result = await syncSallaProducts({
+      merchantId: merchant.id,
+      // salla_products is merchant content: written through the merchant's RLS-scoped session
+      db: await getServerSupabase(),
+      fetchPage: (page, perPage) => sallaApiForMerchant<unknown>(merchant.id, `/products?per_page=${perPage}&page=${page}`),
+      route: ROUTE
+    });
 
-      const rows = items.map((p) => {
-        const price =
-          typeof p.price === "number"
-            ? p.price
-            : typeof p.price === "object" && p.price && "amount" in p.price
-              ? Number(p.price.amount ?? 0)
-              : 0;
-        return {
-          merchant_id: merchant.id,
-          salla_product_id: String(p.id),
-          name: p.name,
-          arabic_name: p.name_ar ?? null,
-          description: p.description ?? "",
-          price,
-          category: p.categories?.[0]?.name ?? "general",
-          image_url: p.main_image ?? null,
-          url: p.urls?.customer ?? null,
-          inventory: p.quantity ?? null,
-          updated_at: new Date().toISOString()
-        };
-      });
-
-      await supabase.from("salla_products").upsert(rows, { onConflict: "merchant_id,salla_product_id" });
-      totalSynced += rows.length;
-
-      if (items.length < limit) break;
-      page++;
-    }
-
-    return NextResponse.json({ ok: true, synced: totalSynced });
+    return NextResponse.json({ ok: true, ...result });
   } catch (err) {
-    return handleRouteError(err);
+    if (err instanceof SallaConnectionError) {
+      // Stable code for the page (lib/salla/messages.ts); 5xx causes are reported by the token layer.
+      return NextResponse.json({ error: err.message, code: err.code }, { status: err.status });
+    }
+    return handleRouteError(err, { route: ROUTE });
   }
 }

@@ -102,7 +102,14 @@ export const SECRET_GROUPS: SecretGroupDef[] = [
       { key: "SALLA_CLIENT_ID", label: "Salla client ID", required: true, type: "text" },
       { key: "SALLA_CLIENT_SECRET", label: "Salla client secret", required: true, type: "secret" },
       { key: "SALLA_REDIRECT_URI", label: "Salla redirect URI", required: true, type: "url" },
-      { key: "SALLA_WEBHOOK_SECRET", label: "Salla webhook secret", required: true, type: "secret" }
+      { key: "SALLA_WEBHOOK_SECRET", label: "Salla webhook secret", required: true, type: "secret" },
+      {
+        key: "NEXT_PUBLIC_SALLA_INSTALL_URL",
+        label: "Salla App Store install link",
+        required: false,
+        type: "url",
+        hint: "Easy Mode (listed apps): when set, \"Connect Salla\" opens this instead of the in-app OAuth flow. Marketing CTAs need a rebuild after changing NEXT_PUBLIC_* keys"
+      }
     ]
   },
   {
