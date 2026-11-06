@@ -11,8 +11,8 @@ import type { PersonaRole } from "@/lib/agents/personas";
 import {
   createDefaultAgentState,
   agentReducer,
+  hydrateAgentState,
   type AgentStoreState,
-  type AgentAction,
   resolveAgentPersona,
 } from "@/lib/agents/store";
 
@@ -58,37 +58,18 @@ export function useAgents(): UseAgentsReturn {
     try {
       setError(null);
       const res = await fetch("/api/agents/status");
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      const agents = data.agents as AgentEntry[];
-
-      // Convert API response to store state
-      const storeState: AgentStoreState = { agents: {} as AgentStoreState["agents"] };
-      for (const entry of agents) {
-        storeState.agents[entry.role] = {
-          role: entry.role,
-          enabled: entry.enabled,
-          status: (entry.status as AgentStoreState["agents"][PersonaRole]["status"]) ?? "idle",
-          lastError: entry.lastError ?? undefined,
-          overrides: entry.overrides
-            ? {
-                display_name: entry.persona.name,
-                avatar: entry.persona.avatar,
-                tone: entry.persona.tone as never,
-                language: undefined,
-                knowledge: undefined,
-                ...(entry.overrides as Record<string, string>),
-              }
-            : undefined,
-          createdAt: undefined,
-          updatedAt: entry.updatedAt,
-        };
+      if (!res.ok) {
+        const errData = await res.json().catch(() => null);
+        throw new Error(errData?.error ?? `HTTP ${res.status}`);
       }
-      dispatch({ type: "HYDRATE", state: storeState });
+      const data = (await res.json()) as { agents?: AgentEntry[] };
+
+      // Merge API rows over the defaults: agents without a stored row stay visible
+      // (switched off) so the merchant can turn them on.
+      dispatch({ type: "HYDRATE", state: hydrateAgentState(data.agents ?? []) });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       // Fall back to defaults (already in state)
-    } finally {
     }
   }, []);
 
@@ -105,8 +86,8 @@ export function useAgents(): UseAgentsReturn {
         body: JSON.stringify(body),
       });
       if (!res.ok) {
-        const errData = await res.json().catch(() => ({ detail: "unknown" }));
-        throw new Error(errData.detail ?? `HTTP ${res.status}`);
+        const errData = await res.json().catch(() => null);
+        throw new Error(errData?.error ?? errData?.detail ?? `HTTP ${res.status}`);
       }
     },
     [],

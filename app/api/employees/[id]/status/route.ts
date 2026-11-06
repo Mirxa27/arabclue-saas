@@ -8,7 +8,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 import { requireMerchantApi } from "@/lib/auth/session";
-import { getServerSupabase } from "@/lib/db/supabase";
+import { getServerSupabase, getServiceSupabase } from "@/lib/db/supabase";
 import { handleRouteError } from "@/lib/api/route-handler";
 import { notFound } from "@/lib/api/errors";
 import { enforceRateLimit } from "@/lib/security/rate-limit";
@@ -50,14 +50,15 @@ export async function PATCH(
 
     const body = StatusSchema.parse(await req.json());
 
-    const sb = await getServerSupabase();
-    const { data, error } = await sb
+    // status is a service-role column; ownership was checked above.
+    const { data, error } = await getServiceSupabase()
       .from("ai_employees")
       .update({
         status: body.status,
         updated_at: new Date().toISOString(),
       })
       .eq("id", (await ctx.params).id)
+      .eq("merchant_id", merchant.id)
       .select("id, status, display_name, role_id")
       .single();
 

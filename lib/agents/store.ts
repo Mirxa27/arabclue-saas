@@ -2,7 +2,8 @@
  * arabclue — Agent Store
  *
  * Centralised state machine for agent toggles, persona selection,
- * and merchant-level configuration. Persisted via Supabase `ai_employees.config`.
+ * and merchant-level configuration. Persisted in Supabase `agent_settings` (one row per
+ * merchant + persona) through /api/agents/status.
  *
  * Data flow:
  *   config (DB) → store → UI toggle / agent pipeline → config (DB)
@@ -72,6 +73,49 @@ export function createDefaultAgentState(): AgentStoreState {
   }
 
   return { agents };
+}
+
+/** Shape of one agent in the GET /api/agents/status response (fields the store needs). */
+export interface AgentStatusApiEntry {
+  role: string;
+  enabled: boolean;
+  status?: string | null;
+  lastError?: string | null;
+  overrides?: Record<string, unknown> | null;
+  updatedAt?: string | null;
+}
+
+const KNOWN_STATUSES: readonly AgentStatus[] = ["idle", "active", "paused", "error", "configuring"];
+
+function stringOverrides(value: Record<string, unknown>): AgentConfig["overrides"] {
+  const out: Record<string, string> = {};
+  for (const key of ["display_name", "avatar", "tone", "knowledge", "language"] as const) {
+    const v = value[key];
+    if (typeof v === "string" && v.length > 0) out[key] = v;
+  }
+  return out;
+}
+
+/**
+ * Merge API rows over the default state. A merchant who never toggled an agent has no
+ * rows, and must still see every agent (switched off) so the first toggle is possible.
+ * Unknown roles are ignored.
+ */
+export function hydrateAgentState(entries: readonly AgentStatusApiEntry[]): AgentStoreState {
+  const state = createDefaultAgentState();
+  for (const entry of entries) {
+    const role = entry.role as PersonaRole;
+    if (!(role in state.agents)) continue;
+    state.agents[role] = {
+      role,
+      enabled: Boolean(entry.enabled),
+      status: KNOWN_STATUSES.includes(entry.status as AgentStatus) ? (entry.status as AgentStatus) : "idle",
+      lastError: entry.lastError ?? undefined,
+      overrides: entry.overrides ? stringOverrides(entry.overrides) : undefined,
+      updatedAt: entry.updatedAt ?? undefined
+    };
+  }
+  return state;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -194,20 +238,4 @@ export function resolveAgentPersona(role: PersonaRole, config?: AgentConfig): Ag
     return applyMerchantOverrides(base, config.overrides);
   }
   return base;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Schema for ai_employees.config JSONB column (used by server routes)
-// ─────────────────────────────────────────────────────────────────────────────
-
-export interface AiEmployeeConfig {
-  /** Enabled agents keyed by role */
-  agents: Record<PersonaRole, {
-    enabled: boolean;
-    status: AgentStatus;
-    last_error?: string;
-    overrides?: AgentConfig["overrides"];
-    created_at?: string;
-    updated_at?: string;
-  }>;
 }

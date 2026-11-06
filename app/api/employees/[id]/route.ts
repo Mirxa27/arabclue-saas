@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 import { requireMerchantApi } from "@/lib/auth/session";
-import { getServerSupabase } from "@/lib/db/supabase";
+import { getServerSupabase, getServiceSupabase } from "@/lib/db/supabase";
 import { handleRouteError } from "@/lib/api/route-handler";
 import { notFound } from "@/lib/api/errors";
 import { redactIntegrationRow } from "@/lib/employees/credentials";
@@ -91,15 +91,16 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
     const employee = await fetchEmployeeOwned((await ctx.params).id);
     const updates = UpdateSchema.parse(await req.json());
 
-    const sb = await getServerSupabase();
     const patch: Record<string, unknown> = { ...updates };
     if (updates.status === "paused") patch.paused_at = new Date().toISOString();
     if (updates.status === "active") patch.paused_at = null;
 
-    const { data, error } = await sb
+    // status / paused_at are service-role columns; ownership was checked above.
+    const { data, error } = await getServiceSupabase()
       .from("ai_employees")
       .update(patch)
       .eq("id", employee.id)
+      .eq("merchant_id", employee.merchant_id)
       .select("*")
       .single();
     if (error || !data) throw new Error(error?.message ?? "Failed to update employee");
@@ -114,11 +115,13 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
 export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ id: string }> }): Promise<NextResponse> {
   try {
     const employee = await fetchEmployeeOwned((await ctx.params).id);
-    const sb = await getServerSupabase();
-    await sb
+    // status / offboarded_at are service-role columns; ownership was checked above.
+    const { error } = await getServiceSupabase()
       .from("ai_employees")
       .update({ status: "offboarded", offboarded_at: new Date().toISOString() })
-      .eq("id", employee.id);
+      .eq("id", employee.id)
+      .eq("merchant_id", employee.merchant_id);
+    if (error) throw new Error(error.message);
     return NextResponse.json({ ok: true });
   } catch (err) {
     return handleRouteError(err, { route: "DELETE /api/employees/:id" });

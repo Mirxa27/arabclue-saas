@@ -6,28 +6,37 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Field, Input, Textarea } from "@/components/ui/primitives";
 import { LogoFull } from "@/components/ui/logo";
-import { getBrowserSupabase } from "@/lib/db/supabase-browser";
 import {
   Check,
   ArrowRight,
   Sparkles,
   RefreshCw,
-  Phone,
-  Share2,
-  FileText,
-  Search,
   MessageSquare,
   ChevronLeft,
   ChevronRight,
   ShieldCheck,
   Zap,
-  Info
+  Info,
+  AlertTriangle
 } from "lucide-react";
 import { trackClientEvent } from "@/lib/analytics/client";
 import { ALL_PERSONAS, type Persona } from "@/lib/agents/personas";
+import { planCards, planModules, personaAvailableOnPlan } from "@/lib/billing/plan-summary";
+import { splitAttributes } from "@/lib/merchant/onboarding-schema";
 import OnboardingChat from "@/components/dashboard/onboarding-chat";
 
 type Step = 1 | 2 | 3 | 4 | 5;
+type Dialect = "khaliji" | "msa" | "english";
+
+// Plan cards and module lists come from lib/billing (prices + entitlements), so the
+// wizard cannot advertise anything the API would refuse.
+const PLAN_CARDS = planCards();
+const TEAM_PERSONAS = ALL_PERSONAS.filter((p) => p.role !== "onboarding");
+
+async function readError(res: Response): Promise<string> {
+  const body = (await res.json().catch(() => null)) as { error?: string } | null;
+  return body?.error ?? `HTTP ${res.status}`;
+}
 
 export default function WelcomePage() {
   const router = useRouter();
@@ -41,13 +50,16 @@ export default function WelcomePage() {
   // Step 2: brand voice
   const [essence, setEssence] = useState("");
   const [attributes, setAttributes] = useState("");
-  const [dialect, setDialect] = useState<"khaliji" | "msa" | "english">("khaliji");
+  const [dialect, setDialect] = useState<Dialect>("khaliji");
+  const [kitGenerating, setKitGenerating] = useState(false);
+  const [kitError, setKitError] = useState<string | null>(null);
 
   // Step 3: plan tier
   const [plan, setPlan] = useState<"lite" | "plus" | "pro">("plus");
 
   // Step 4: confirm
   const [dpaAccepted, setDpaAccepted] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
   const [chatOpen, setChatOpen] = useState(false);
 
   // Sara AI Assistant state
@@ -66,7 +78,7 @@ export default function WelcomePage() {
       setSaraTyping(false);
       if (step === 1) {
         setSaraMessage(
-          "أهلاً وسهلاً بك في أرب كلو! 🇸🇦 أنا سارة، منسقة التهيئة الرقمية المخصصة لمساعدتك في توظيف وتدريب فريق عملك من وكلاء الذكاء الاصطناعي. خلّنا نبدأ بتسجيل متجرك، اكتب اسم عملك أو اضغط بالأسفل لملء متجر عطور تجريبي لنبدأ سوا!"
+          "أهلاً وسهلاً بك في أرب كلو! 🇸🇦 أنا سارة، منسقة التهيئة الرقمية المخصصة لمساعدتك في توظيف وتدريب فريق عملك من وكلاء الذكاء الاصطناعي. خلّنا نبدأ بتسجيل متجرك: اكتب الاسم كما هو في سجلك التجاري، وأضف رقمك الضريبي إذا كنت مسجلاً في ضريبة القيمة المضافة."
         );
       } else if (step === 2) {
         setSaraMessage(
@@ -74,15 +86,15 @@ export default function WelcomePage() {
         );
       } else if (step === 3) {
         setSaraMessage(
-          "تسلسل رائع! الحين تختار الباقة المناسبة لحجم متجرك. باقة بلس هي الباقة المفضلة لـ 80% من التجار لأنها تفعل لك سالم (ممثل خدمة العملاء الهاتفي) و نورة (مسوقة السوشال ميديا) بجانب سيو المنتجات!"
+          "تسلسل رائع! الحين تختار الباقة المناسبة لحجم متجرك. تفاصيل كل باقة والوحدات المشمولة فيها موضحة بجانبها، وتقدر تغيّر باقتك في أي وقت من صفحة الفوترة."
         );
       } else if (step === 4) {
         setSaraMessage(
-          `فريق عملك الذكي جاهز للبدء يا غالي! كل وكيل له لهجة محلية وتدريب متكامل. نورة تصمم وتجدول السوشال، سالم يجيب على الاتصالات، لمياء تحسن سيو جوجل. اضغط على أي موظف عشان تسمع رسالته الترحيبية!`
+          `تعرّف على فريقك الذكي يا غالي! كل وكيل له لهجة محلية وأسلوب خاص: نورة للسوشال، سالم للمكالمات، لمياء لسيو جوجل. الوكلاء المشمولون في باقتك يتفعّلون من لوحة التحكم بعد تأكيد الدفع وربط قنواتهم. اضغط على أي موظف عشان تسمع رسالته الترحيبية!`
         );
       } else if (step === 5) {
         setSaraMessage(
-          `عافاك الله! اكتملت التهيئة وضبطنا هويتك واخترنا وكلائك الذكيين. الحين بس نحتاج نوافق على سياسة الخصوصية وننتقل لبوابة الدفع الآمنة لتفعيل وكلائك ليعملوا من أجلك 24/7.`
+          `آخر خطوة! راجع بيانات متجرك، ووافق على سياسة الخصوصية واتفاقية معالجة البيانات، وبعدها ننتقل لبوابة الدفع الآمنة (ميسر) لتفعيل باقتك.`
         );
       }
     }, 700);
@@ -90,164 +102,87 @@ export default function WelcomePage() {
     return () => clearTimeout(timer);
   }, [step, businessName]);
 
-  // AI autofill actions
-  const applyDemoStore = () => {
-    setSaraTyping(true);
-    setSaraActionStatus("جاري ملء المتجر التجريبي...");
-    setTimeout(() => {
-      setBusinessName("بيت العود الفاخر");
-      setVatNumber("310298475800003");
-      setSaraTyping(false);
-      setSaraActionStatus("تم تطبيق متجر بيت العود مع رقم ضريبي افتراضي متوافق! ✓");
-    }, 800);
-  };
-
-  const optimizeLegalName = () => {
-    if (!businessName) return;
-    setSaraTyping(true);
-    setSaraActionStatus("جاري تحسين الصياغة القانونية لزاتكا...");
-    setTimeout(() => {
-      setBusinessName((prev) =>
-        prev.endsWith("المحدودة") || prev.endsWith("وشركاؤه") ? prev : `${prev} للتجارة المحدودة`
-      );
-      setSaraTyping(false);
-      setSaraActionStatus("تمت إضافة الصياغة القانونية المثالية للفواتير! ✓");
-    }, 600);
-  };
-
-  const generateBrandKit = () => {
-    setSaraTyping(true);
+  // Real AI suggestion (POST /api/brand-kit/generate); the merchant reviews it before saving.
+  async function generateBrandKit() {
+    const name = businessName.trim();
+    if (!name || kitGenerating) return;
+    setKitGenerating(true);
+    setKitError(null);
     setSaraActionStatus("جاري تحليل اسم المتجر وتوليد هوية العلامة بالذكاء الاصطناعي...");
-    setTimeout(() => {
-      const name = businessName.toLowerCase();
-      if (name.includes("عود") || name.includes("oud") || name.includes("بخور")) {
-        setEssence("بخور وعطور عود طبيعي فاخر للأسر الباحثة عن الفخامة والروائح الشرقية الأصيلة.");
-        setAttributes("تراثي، فخم، أصيل، دافئ، مضياف");
-        setDialect("khaliji");
-      } else if (name.includes("قهوة") || name.includes("كافيه") || name.includes("coffee") || name.includes("roast")) {
-        setEssence("أجود حبوب البن المحمصة محلياً والمبهرة بالهيل والزعفران لتجربة قهوة سعودية مثالية.");
-        setAttributes("كريم، ودود، مبهج، أصيل، اجتماعي");
-        setDialect("khaliji");
-      } else if (name.includes("تمور") || name.includes("dates") || name.includes("نخيل")) {
-        setEssence("تمور خلاص الأحساء الفاخرة المحشوة بالمكسرات والحلويات التراثية للمناسبات والأعياد.");
-        setAttributes("تقليدي، حلو، عائلي، كريم، دافئ");
-        setDialect("khaliji");
-      } else {
-        setEssence(`أفضل المنتجات المختارة بعناية لتلبية تطلعات عملائنا في الخليج وبأعلى معايير الجودة.`);
-        setAttributes("موثوق، عصري، مميز، احترافي، مبتكر");
-        setDialect("khaliji");
-      }
-      setSaraTyping(false);
-      setSaraActionStatus("تم توليد الجوهر والسمات المناسبة لهويتك بنجاح! ✓");
-    }, 1000);
-  };
+    try {
+      const res = await fetch("/api/brand-kit/generate", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ brand_name: name, description: essence.trim() || undefined })
+      });
+      if (!res.ok) throw new Error(await readError(res));
+      const body = (await res.json()) as {
+        kit?: { essence?: string; attributes?: string[]; dialect?: Dialect };
+      };
+      const kit = body.kit;
+      if (!kit?.essence) throw new Error("Empty response");
+      setEssence(kit.essence);
+      setAttributes((kit.attributes ?? []).join("، "));
+      if (kit.dialect) setDialect(kit.dialect);
+      setSaraActionStatus("تم توليد الجوهر والسمات بالذكاء الاصطناعي — راجعها وعدّلها كما تحب ✓");
+    } catch (err) {
+      setSaraActionStatus(null);
+      setKitError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setKitGenerating(false);
+    }
+  }
 
+  // A preset of voice traits (not AI): fills the attributes and dialect only.
   const applyKsaTraditionalTraits = () => {
-    setEssence("عطور ومقتنيات فاخرة تناسب تقاليد الضيافة ومجتمعنا الأصيل.");
-    setAttributes("اصيل، كرم، ضيافة، عريق، فخم");
+    setAttributes("أصيل، كريم، مضياف، عريق، فخم");
     setDialect("khaliji");
-    setSaraActionStatus("تم تطبيق السمات واللمسات التراثية السعودية! ✓");
+    setSaraActionStatus("تم تطبيق السمات التراثية السعودية ✓");
   };
 
   const recommendPlusPlan = () => {
     setPlan("plus");
-    setSaraActionStatus("تم اختيار باقة بلس الموصى بها (وكلاء الصوت، التواصل، السيو، زاتكا)! ✓");
+    setSaraActionStatus(`تم اختيار باقة بلس: ${planModules("plus").map((m) => m.ar).join("، ")} ✓`);
   };
 
   const playAgentSpeech = (personaName: string, text: string) => {
-    setActiveVoiceIntro(null);
-    setSaraTyping(true);
-    setTimeout(() => {
-      setSaraTyping(false);
-      setActiveVoiceIntro(`💬 ${personaName}: "${text}"`);
-    }, 500);
+    setActiveVoiceIntro(`💬 ${personaName}: "${text}"`);
   };
 
-  const optimizeSecurityKeys = () => {
-    setSaraTyping(true);
-    setSaraActionStatus("جاري تهيئة مفاتيح التشفير الآمنة والتخزين المعزول...");
-    setTimeout(() => {
-      setSaraTyping(false);
-      setSaraActionStatus("مفاتيح التخزين المعزول جاهزة ومتوافقة 100% مع أنظمة الأمن الرقمي السعودية! ✓");
-    }, 900);
-  };
-
+  // The only write of the wizard: the server creates/updates the merchant (always
+  // lite/pending for a new store) and the brand kit. The chosen plan is paid for at
+  // /billing and applied when Moyasar confirms the payment.
   async function finish() {
-    if (!dpaAccepted) return;
+    if (!dpaAccepted || submitting) return;
     setSubmitting(true);
-    const sb = getBrowserSupabase();
-    const { data: { user } } = await sb.auth.getUser();
-    if (!user) {
-      setSubmitting(false);
-      return router.push("/login");
-    }
-
-    const { data: existing } = await sb
-      .from("merchants")
-      .select("id, plan")
-      .eq("owner_user_id", user.id)
-      .maybeSingle();
-
-    let merchantId: string;
-
-    if (existing) {
-      merchantId = existing.id;
-      await sb
-        .from("merchants")
-        .update({
-          seller_name: businessName,
-          vat_number: vatNumber || null,
-          plan,
-          dpa_accepted_at: new Date().toISOString(),
-          dpa_version: "2025-01"
+    setSubmitError(null);
+    try {
+      const res = await fetch("/api/merchant/onboarding", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          businessName: businessName.trim(),
+          vatNumber: vatNumber.trim(),
+          dpaAccepted: true,
+          brandKit: { essence: essence.trim(), attributes: splitAttributes(attributes), dialect }
         })
-        .eq("id", existing.id);
-    } else {
-      const { data: merchant, error: merchantErr } = await sb
-        .from("merchants")
-        .insert({
-          owner_user_id: user.id,
-          seller_name: businessName,
-          vat_number: vatNumber || null,
-          plan,
-          subscription_status: "pending",
-          dpa_accepted_at: new Date().toISOString(),
-          dpa_version: "2025-01"
-        })
-        .select()
-        .single();
-
-      if (merchantErr || !merchant) {
-        if (merchantErr?.code === "23505") {
-          router.push(`/billing?plan=${plan}`);
-          return;
-        }
-        setSubmitting(false);
-        alert(merchantErr?.message ?? "Could not create merchant profile. Try again or contact support.");
+      });
+      if (res.status === 401) {
+        router.push("/login");
         return;
       }
-      merchantId = merchant.id;
-    }
-
-    const { error: kitErr } = await sb.from("brand_kits").upsert({
-      merchant_id: merchantId,
-      brand_name: businessName,
-      essence,
-      attributes: attributes.split(",").map((s) => s.trim()).filter(Boolean),
-      dialect
-    });
-
-    if (kitErr) {
+      if (!res.ok) throw new Error(await readError(res));
+      trackClientEvent("onboarding.complete", { plan });
+      router.push(`/billing?plan=${plan}`);
+    } catch (err) {
+      setSubmitError(err instanceof Error ? err.message : String(err));
       setSubmitting(false);
-      alert(kitErr.message);
-      return;
     }
-
-    trackClientEvent("onboarding.complete", { plan });
-    router.push(`/billing?plan=${plan}`);
   }
 
-  const isSocialPlan = plan === "plus" || plan === "pro";
+  const selectedPlan = PLAN_CARDS.find((p) => p.id === plan) ?? PLAN_CARDS[0];
+  const includedModules = planModules(plan);
+  const teamAvailable = TEAM_PERSONAS.some((p) => personaAvailableOnPlan(p.role, plan));
 
   const stepLabel = (n: Step, label: string, labelAr: string) => (
     <div className="flex items-center gap-2">
@@ -339,11 +274,11 @@ export default function WelcomePage() {
                   
                   <div className="space-y-4 pt-2">
                     <Field label="Business legal name" hint="Your storefront brand name. Use correct legal casing.">
-                      <Input value={businessName} onChange={(e) => setBusinessName(e.target.value)} placeholder="e.g., Bayt Al-Oud" className="rounded-xl border-rule/80 focus:border-ink text-base" />
+                      <Input dir="auto" value={businessName} maxLength={200} onChange={(e) => setBusinessName(e.target.value)} placeholder="e.g., Bayt Al-Oud" className="rounded-xl border-rule/80 focus:border-ink text-base" />
                     </Field>
                     
                     <Field label="VAT number" hint="15-digit Tax identification number. Leave blank if not VAT-registered.">
-                      <Input value={vatNumber} maxLength={15} onChange={(e) => setVatNumber(e.target.value)} placeholder="310298475800003" className="rounded-xl border-rule/80 focus:border-ink font-mono text-base tracking-wider" />
+                      <Input value={vatNumber} maxLength={15} inputMode="numeric" onChange={(e) => setVatNumber(e.target.value)} placeholder="3XXXXXXXXXXXXX3" className="rounded-xl border-rule/80 focus:border-ink font-mono text-base tracking-wider" />
                     </Field>
                   </div>
 
@@ -366,18 +301,18 @@ export default function WelcomePage() {
 
                   <div className="space-y-4 pt-2">
                     <Field label="Essence" hint="One concise sentence: what you sell and who your target audience is.">
-                      <Textarea rows={3} value={essence} onChange={(e) => setEssence(e.target.value)} placeholder="Premium Oud fragrances and traditional incense tailored for modern Saudi households." className="rounded-xl border-rule/80 focus:border-ink text-base leading-relaxed" />
+                      <Textarea dir="auto" rows={3} maxLength={1000} value={essence} onChange={(e) => setEssence(e.target.value)} placeholder="Premium Oud fragrances and traditional incense tailored for modern Saudi households." className="rounded-xl border-rule/80 focus:border-ink text-base leading-relaxed" />
                     </Field>
 
-                    <Field label="Voice attributes" hint="Comma-separated adjectives (e.g., heritage, elegant, warm, premium)">
-                      <Input value={attributes} onChange={(e) => setAttributes(e.target.value)} placeholder="heritage, elegant, warm, premium" className="rounded-xl border-rule/80 focus:border-ink text-base" />
+                    <Field label="Voice attributes" hint="Comma-separated adjectives — , or ، (e.g., heritage, elegant, warm, premium)">
+                      <Input dir="auto" value={attributes} onChange={(e) => setAttributes(e.target.value)} placeholder="heritage, elegant, warm, premium" className="rounded-xl border-rule/80 focus:border-ink text-base" />
                     </Field>
 
                     <Field label="Arabic Dialect Strategy" hint="Select the primary dialect register for AI content generation.">
                       <select
                         className="w-full bg-paper border border-rule/80 rounded-xl px-4 py-3 text-sm focus:border-ink outline-none transition"
                         value={dialect}
-                        onChange={(e) => setDialect(e.target.value as "khaliji" | "msa" | "english")}
+                        onChange={(e) => setDialect(e.target.value as Dialect)}
                       >
                         <option value="khaliji">Khaliji (Saudi Dialect / لهجة خليجية سعودية)</option>
                         <option value="msa">MSA (Fusha Arabic / لغة فصحى مبسطة)</option>
@@ -407,31 +342,35 @@ export default function WelcomePage() {
                   </div>
 
                   <div className="grid gap-3 pt-2">
-                    {[
-                      { id: "lite" as const, name: "Lite Plan", price: "99 SAR/mo", desc: "ZATCA e-Invoicing compliance agent + SEO copywriting agent.", features: "Best for sole traders" },
-                      { id: "plus" as const, name: "Plus Plan", price: "299 SAR/mo", desc: "ZATCA + SEO + Noora (Social Marketer) + Salem (Voice Representative).", features: "Most Popular choice", highlight: true },
-                      { id: "pro" as const, name: "Pro Plan", price: "599 SAR/mo", desc: "Full smart workforce (All social, 2000 voice mins, CRM WhatsApp, Wathq CR integration).", features: "Perfect for large scale e-commerce" }
-                    ].map((p) => (
+                    {PLAN_CARDS.map((p) => (
                       <label
                         key={p.id}
-                        className={`cursor-pointer border rounded-2xl p-5 flex items-center justify-between transition-all duration-300 hover-glow ${
+                        className={`cursor-pointer border rounded-2xl p-5 flex items-center justify-between gap-4 transition-all duration-300 hover-glow ${
                           plan === p.id 
                             ? "border-accent bg-accent/5 ring-1 ring-accent" 
                             : "border-rule/80 bg-paper/20"
                         }`}
                       >
-                        <div className="flex-1">
+                        <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2.5">
-                            <span className={`font-display text-xl ${plan === p.id ? "text-accent font-bold" : "text-ink"}`}>{p.name}</span>
-                            {p.highlight && (
+                            <span className={`font-display text-xl ${plan === p.id ? "text-accent font-bold" : "text-ink"}`}>{p.name} Plan</span>
+                            {p.id === "plus" && (
                               <span className="text-[8px] font-mono font-bold uppercase tracking-wider bg-accent/15 text-accent border border-accent/20 px-2 py-0.5 rounded-full animate-pulse-soft">Recommended</span>
                             )}
                           </div>
-                          <p className="text-xs text-ink-mute mt-1.5 leading-relaxed max-w-md">{p.desc}</p>
-                          <span className="text-[9px] font-mono text-ink-mute uppercase tracking-widest block mt-2">{p.features}</span>
+                          <p className="text-xs text-ink-soft mt-1.5 leading-relaxed font-arabic text-right" dir="rtl">
+                            {p.modules.map((m) => m.ar).join(" · ")}
+                          </p>
+                          <p className="text-[11px] text-ink-mute mt-1 leading-relaxed">{p.features.join(" · ")}</p>
+                          {p.employeeSeats > 0 && (
+                            <span className="text-[9px] font-mono text-ink-mute uppercase tracking-widest block mt-2">
+                              Up to {p.employeeSeats} AI employees · حتى {p.employeeSeats} موظفين أذكياء
+                            </span>
+                          )}
                         </div>
                         <div className="text-right shrink-0">
                           <span className="font-display text-xl font-bold block text-ink">{p.price}</span>
+                          <span className="text-[10px] text-ink-mute block">/ month · شهرياً</span>
                           <input 
                             type="radio" 
                             name="plan" 
@@ -463,15 +402,20 @@ export default function WelcomePage() {
                     <span className="text-[10px] font-mono uppercase tracking-widest text-accent bg-accent/15 px-2 py-0.5 rounded border border-accent/20">Step 04</span>
                     <h1 className="font-display text-3xl sm:text-4xl tracking-crisp mt-3">Meet your pre-trained staff.</h1>
                     <p className="mt-2 text-sm text-ink-soft">
-                      {isSocialPlan
-                        ? "These custom-built AI employee personas are hired automatically under your selected plan. Connect their target channels to activate them."
-                        : "Your plan includes Lamia (SEO) and Tariq (Analyst). Upgrade to Plus or Pro plan to unlock Noora (Social) and Salem (Voice calls)."}
+                      {teamAvailable
+                        ? `Team members marked as included are part of the ${selectedPlan.name} plan. Switch them on from your dashboard once payment is confirmed and their channels are connected.`
+                        : `The ${selectedPlan.name} plan covers ZATCA e-invoicing. AI team members (social, voice, SEO) are included from the Plus plan.`}
+                    </p>
+                    <p className="mt-1.5 text-xs text-ink-mute font-arabic text-right" dir="rtl">
+                      {teamAvailable
+                        ? "الموظفون المشمولون في باقتك تشغّلهم من لوحة التحكم بعد تأكيد الدفع وربط قنواتهم."
+                        : "باقتك تغطي فواتير زاتكا الإلكترونية. وكلاء السوشال والمكالمات والسيو متاحون من باقة بلس."}
                     </p>
                   </div>
 
                   <div className="grid gap-3 max-h-[360px] overflow-y-auto pr-1 scrollbar-thin">
-                    {ALL_PERSONAS.map((p: Persona) => {
-                      const isAvailable = p.role === "seo" || p.role === "analyst" ? true : isSocialPlan;
+                    {TEAM_PERSONAS.map((p: Persona) => {
+                      const isAvailable = personaAvailableOnPlan(p.role, plan);
                       return (
                         <div
                           key={p.id}
@@ -491,8 +435,10 @@ export default function WelcomePage() {
                                   {p.name} <span className="text-ink-mute font-normal text-xs ml-1">({p.nameEn})</span>
                                 </h4>
                                 <span className="text-[9px] font-mono text-ink-mute">Age {p.age}</span>
-                                {!isAvailable && (
-                                  <span className="text-[8px] font-mono font-bold bg-amber-500/10 text-amber-600 border border-amber-500/20 rounded px-1.5 py-0.5">Upgrade Hires</span>
+                                {isAvailable ? (
+                                  <span className="text-[8px] font-mono font-bold bg-accent/10 text-accent border border-accent/20 rounded px-1.5 py-0.5">Included · مشمول</span>
+                                ) : (
+                                  <span className="text-[8px] font-mono font-bold bg-amber-500/10 text-amber-600 border border-amber-500/20 rounded px-1.5 py-0.5">Upgrade · يتطلب ترقية</span>
                                 )}
                               </div>
                               <p className="text-[10px] text-ink-soft leading-relaxed text-right mt-1.5 font-arabic" dir="rtl">
@@ -531,24 +477,35 @@ export default function WelcomePage() {
                   </div>
 
                   <div className="border border-rule/65 bg-paper-deep/30 rounded-2xl p-5 space-y-3">
-                    <div className="flex justify-between text-sm border-b border-rule/30 pb-2.5">
+                    <div className="flex justify-between gap-4 text-sm border-b border-rule/30 pb-2.5">
                       <span className="text-ink-mute">Store Name:</span>
-                      <strong className="text-ink font-semibold">{businessName}</strong>
+                      <strong className="text-ink font-semibold" dir="auto">{businessName}</strong>
                     </div>
+                    {vatNumber.trim() && (
+                      <div className="flex justify-between gap-4 text-sm border-b border-rule/30 pb-2.5">
+                        <span className="text-ink-mute">VAT Number:</span>
+                        <strong className="text-ink font-semibold font-mono">{vatNumber.trim()}</strong>
+                      </div>
+                    )}
                     <div className="flex justify-between text-sm border-b border-rule/30 pb-2.5">
                       <span className="text-ink-mute">Selected Dialect:</span>
                       <strong className="text-ink font-semibold capitalize">{dialect}</strong>
                     </div>
-                    <div className="flex justify-between text-sm border-b border-rule/30 pb-2.5">
+                    <div className="flex justify-between gap-4 text-sm border-b border-rule/30 pb-2.5">
                       <span className="text-ink-mute">Subscription Tier:</span>
-                      <strong className="text-accent font-semibold capitalize">{plan} Plan</strong>
-                    </div>
-                    <div className="flex justify-between text-sm">
-                      <span className="text-ink-mute">Assigned AI Workforce:</span>
-                      <strong className="text-ink font-semibold">
-                        {isSocialPlan ? "نورة · سالم · لمياء · فهد · ريم" : "لمياء · طارق"}
+                      <strong className="text-accent font-semibold">
+                        {selectedPlan.name} Plan · {selectedPlan.price} / month
                       </strong>
                     </div>
+                    <div className="flex justify-between gap-4 text-sm">
+                      <span className="text-ink-mute shrink-0">Included modules:</span>
+                      <strong className="text-ink font-semibold font-arabic text-right" dir="rtl">
+                        {includedModules.map((m) => m.ar).join(" · ")}
+                      </strong>
+                    </div>
+                    <p className="text-[11px] text-ink-mute pt-1">
+                      The plan activates once Moyasar confirms your payment. · تتفعّل الباقة بعد تأكيد الدفع عبر ميسر.
+                    </p>
                   </div>
 
                   <label className="flex items-start gap-3 border border-rule/75 bg-paper/50 p-4 rounded-xl cursor-pointer hover:border-ink/30 transition">
@@ -559,11 +516,28 @@ export default function WelcomePage() {
                       onChange={(e) => setDpaAccepted(e.target.checked)}
                     />
                     <span className="text-xs text-ink-soft leading-relaxed">
-                      I accept the{" "}
-                      <Link href="/legal/privacy" target="_blank" className="text-accent hover:underline font-semibold">
-                        Privacy Policy & Terms
-                      </Link>{" "}
-                      and consent to the cross-border data processing required for GCC customer compliance under Saudi PDPL law.
+                      <span className="block font-arabic text-right" dir="rtl">
+                        أوافق على{" "}
+                        <Link href="/legal/privacy" target="_blank" className="text-accent hover:underline font-semibold">
+                          سياسة الخصوصية والشروط
+                        </Link>{" "}
+                        و
+                        <Link href="/legal/dpa" target="_blank" className="text-accent hover:underline font-semibold">
+                          اتفاقية معالجة البيانات
+                        </Link>
+                        ، وعلى معالجة البيانات عبر الحدود اللازمة وفق نظام حماية البيانات الشخصية السعودي.
+                      </span>
+                      <span className="block mt-1.5">
+                        I accept the{" "}
+                        <Link href="/legal/privacy" target="_blank" className="text-accent hover:underline font-semibold">
+                          Privacy Policy & Terms
+                        </Link>{" "}
+                        and the{" "}
+                        <Link href="/legal/dpa" target="_blank" className="text-accent hover:underline font-semibold">
+                          Data Processing Agreement
+                        </Link>
+                        , and consent to the cross-border data processing required for GCC customer compliance under Saudi PDPL law.
+                      </span>
                     </span>
                   </label>
 
@@ -585,6 +559,16 @@ export default function WelcomePage() {
                       )}
                     </Button>
                   </div>
+
+                  {submitError && (
+                    <div role="alert" className="flex items-start gap-2 rounded-xl border border-red-500/25 bg-red-500/10 p-3 text-xs text-red-700 dark:text-red-400">
+                      <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                      <div>
+                        <p className="font-arabic" dir="rtl">تعذّر حفظ بيانات متجرك. راجع البيانات وحاول مرة أخرى.</p>
+                        <p className="mt-1">Could not save your store details: <span dir="auto">{submitError}</span></p>
+                      </div>
+                    </div>
+                  )}
                 </section>
               )}
 
@@ -667,31 +651,19 @@ export default function WelcomePage() {
                   {/* Step-specific Interactive AI Actions */}
                   <div className="mt-5 pt-4 border-t border-rule/25">
                     <p className="text-[8px] font-mono uppercase tracking-widest text-ink-mute/70 mb-2.5 text-left font-bold flex items-center gap-1.5">
-                      <Zap size={8} className="text-accent" /> Recommended AI Suggestions
+                      <Zap size={8} className="text-accent" /> Suggestions · اقتراحات
                     </p>
 
                     <div className="flex flex-col gap-2">
                       {step === 1 && (
-                        <>
-                          <button
-                            type="button"
-                            onClick={applyDemoStore}
-                            className="w-full py-2 px-3 bg-paper hover:bg-paper-deep text-ink border border-rule hover:border-accent/40 rounded-xl text-left font-semibold text-xs transition duration-300 flex items-center justify-between hover-lift shadow-glass-xs"
-                          >
-                            <span className="font-arabic font-normal text-ink-soft">✨ تطبيق متجر عطور تجريبي (بيت العود)</span>
-                            <span className="font-mono text-[9px] text-ink-mute uppercase tracking-widest hidden sm:inline">Autofill Oud Demo</span>
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={optimizeLegalName}
-                            disabled={!businessName}
-                            className="w-full py-2 px-3 bg-paper hover:bg-paper-deep text-ink border border-rule hover:border-accent/40 rounded-xl text-left font-semibold text-xs transition duration-300 flex items-center justify-between hover-lift shadow-glass-xs disabled:opacity-30 disabled:cursor-not-allowed"
-                          >
-                            <span className="font-arabic font-normal text-ink-soft">✨ تنسيق الصياغة القانونية لزاتكا</span>
-                            <span className="font-mono text-[9px] text-ink-mute uppercase tracking-widest hidden sm:inline">Format ZATCA LLC</span>
-                          </button>
-                        </>
+                        <div className="p-3 bg-paper/60 border border-rule/50 rounded-xl text-[11px] leading-relaxed">
+                          <p className="font-arabic text-ink-soft text-right" dir="rtl">
+                            💡 استخدم الاسم الموجود في سجلك التجاري — يظهر هذا الاسم ورقمك الضريبي على فواتير زاتكا.
+                          </p>
+                          <p className="text-ink-mute mt-1">
+                            Use the exact name on your Commercial Registration — it appears with your VAT number on ZATCA invoices.
+                          </p>
+                        </div>
                       )}
 
                       {step === 2 && (
@@ -699,18 +671,31 @@ export default function WelcomePage() {
                           <button
                             type="button"
                             onClick={generateBrandKit}
-                            className="w-full py-2 px-3 bg-paper hover:bg-paper-deep text-ink border border-rule hover:border-accent/40 rounded-xl text-left font-semibold text-xs transition duration-300 flex items-center justify-between hover-lift shadow-glass-xs"
+                            disabled={!businessName.trim() || kitGenerating}
+                            aria-busy={kitGenerating}
+                            className="w-full py-2 px-3 bg-paper hover:bg-paper-deep text-ink border border-rule hover:border-accent/40 rounded-xl text-left font-semibold text-xs transition duration-300 flex items-center justify-between hover-lift shadow-glass-xs disabled:opacity-40 disabled:cursor-not-allowed"
                           >
-                            <span className="font-arabic font-normal text-ink-soft">✨ توليد الهوية وصوت العلامة بالذكاء الاصطناعي</span>
-                            <span className="font-mono text-[9px] text-ink-mute uppercase tracking-widest hidden sm:inline">AI Generate Voice</span>
+                            <span className="font-arabic font-normal text-ink-soft flex items-center gap-1.5">
+                              {kitGenerating ? <RefreshCw size={12} className="animate-spin" /> : "✨"}
+                              {kitGenerating ? "جاري التوليد بالذكاء الاصطناعي..." : "توليد الهوية وصوت العلامة بالذكاء الاصطناعي"}
+                            </span>
+                            <span className="font-mono text-[9px] text-ink-mute uppercase tracking-widest hidden sm:inline">
+                              {kitGenerating ? "Generating…" : "AI Generate Voice"}
+                            </span>
                           </button>
+                          {kitError && (
+                            <div role="alert" className="p-2.5 rounded-xl border border-red-500/25 bg-red-500/10 text-[11px] text-red-700 dark:text-red-400 leading-relaxed">
+                              <p className="font-arabic text-right" dir="rtl">تعذّر توليد الهوية الآن — اكتبها يدوياً أو حاول مرة أخرى.</p>
+                              <p className="mt-0.5">Could not generate a brand voice: <span dir="auto">{kitError}</span></p>
+                            </div>
+                          )}
 
                           <button
                             type="button"
                             onClick={applyKsaTraditionalTraits}
                             className="w-full py-2 px-3 bg-paper hover:bg-paper-deep text-ink border border-rule hover:border-accent/40 rounded-xl text-left font-semibold text-xs transition duration-300 flex items-center justify-between hover-lift shadow-glass-xs"
                           >
-                            <span className="font-arabic font-normal text-ink-soft">✨ ضبط سمات تراثية سعودية أصيلة</span>
+                            <span className="font-arabic font-normal text-ink-soft">ضبط سمات تراثية سعودية أصيلة (قالب جاهز)</span>
                             <span className="font-mono text-[9px] text-ink-mute uppercase tracking-widest hidden sm:inline">Saudi Heritage preset</span>
                           </button>
                         </>
@@ -722,8 +707,8 @@ export default function WelcomePage() {
                           onClick={recommendPlusPlan}
                           className="w-full py-2 px-3 bg-paper hover:bg-paper-deep text-ink border border-rule hover:border-accent/40 rounded-xl text-left font-semibold text-xs transition duration-300 flex items-center justify-between hover-lift shadow-glass-xs"
                         >
-                          <span className="font-arabic font-normal text-ink-soft">✨ التوصية بأفضل قيمة لمتجري</span>
-                          <span className="font-mono text-[9px] text-ink-mute uppercase tracking-widest hidden sm:inline">Autofill recommended</span>
+                          <span className="font-arabic font-normal text-ink-soft">اختيار الباقة الموصى بها (بلس)</span>
+                          <span className="font-mono text-[9px] text-ink-mute uppercase tracking-widest hidden sm:inline">Pick recommended</span>
                         </button>
                       )}
 
@@ -737,7 +722,7 @@ export default function WelcomePage() {
                                 "هلا والله! أنا نورة، مسوّقتك الرقمية. بمسك حسابات متجرك على تيك توك وإنستقرام وبصنع لك كاروسيلات ومنشورات تجنن وبلغة خليجية أصيلة تعدل مزاج عملائك!"
                               )
                             }
-                            disabled={!isSocialPlan}
+                            disabled={!personaAvailableOnPlan("social", plan)}
                             className="py-2 px-1 bg-paper hover:bg-paper-deep text-ink border border-rule hover:border-accent/40 rounded-lg text-center font-arabic text-[10px] transition duration-300 truncate hover-lift disabled:opacity-20 disabled:cursor-not-allowed"
                           >
                             📢 نورة (سوشال)
@@ -750,7 +735,7 @@ export default function WelcomePage() {
                                 "حيّاك الله يا غالي! أنا سالم، ممثل الدعم الهاتفي الصوتي. بردّ على كل مكالمات متجرك بعربية سعودية دافئة وبجاوب على الاستفسارات وبشيك على طلبات سلة فوراً."
                               )
                             }
-                            disabled={!isSocialPlan}
+                            disabled={!personaAvailableOnPlan("voice", plan)}
                             className="py-2 px-1 bg-paper hover:bg-paper-deep text-ink border border-rule hover:border-accent/40 rounded-lg text-center font-arabic text-[10px] transition duration-300 truncate hover-lift disabled:opacity-20 disabled:cursor-not-allowed"
                           >
                             🎙️ سالم (صوت)
@@ -763,7 +748,8 @@ export default function WelcomePage() {
                                 "أهلاً بك. أنا لمياء خبيرة السيو. سأعمل على تحسين أوصاف منتجاتك وكتابة صياغات يفهمها محرك بحث جوجل السعودي لتصدر نتائج البحث."
                               )
                             }
-                            className="py-2 px-1 bg-paper hover:bg-paper-deep text-ink border border-rule hover:border-accent/40 rounded-lg text-center font-arabic text-[10px] transition duration-300 truncate hover-lift"
+                            disabled={!personaAvailableOnPlan("seo", plan)}
+                            className="py-2 px-1 bg-paper hover:bg-paper-deep text-ink border border-rule hover:border-accent/40 rounded-lg text-center font-arabic text-[10px] transition duration-300 truncate hover-lift disabled:opacity-20 disabled:cursor-not-allowed"
                           >
                             🔍 لمياء (سيو)
                           </button>
@@ -771,14 +757,14 @@ export default function WelcomePage() {
                       )}
 
                       {step === 5 && (
-                        <button
-                          type="button"
-                          onClick={optimizeSecurityKeys}
+                        <Link
+                          href="/legal/dpa"
+                          target="_blank"
                           className="w-full py-2 px-3 bg-paper hover:bg-paper-deep text-ink border border-rule hover:border-accent/40 rounded-xl text-left font-semibold text-xs transition duration-300 flex items-center justify-between hover-lift shadow-glass-xs"
                         >
-                          <span className="font-arabic font-normal text-ink-soft">✨ تهيئة وتشفير مفاتيح الاعتمادات الآمنة</span>
-                          <span className="font-mono text-[9px] text-ink-mute uppercase tracking-widest hidden sm:inline">Pre-auth keys</span>
-                        </button>
+                          <span className="font-arabic font-normal text-ink-soft">📄 اقرأ اتفاقية معالجة البيانات قبل الموافقة</span>
+                          <span className="font-mono text-[9px] text-ink-mute uppercase tracking-widest hidden sm:inline">Read the DPA</span>
+                        </Link>
                       )}
                     </div>
                   </div>

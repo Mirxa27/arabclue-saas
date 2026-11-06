@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 import { requireMerchantApi } from "@/lib/auth/session";
-import { getServerSupabase } from "@/lib/db/supabase";
+import { getServerSupabase, getServiceSupabase } from "@/lib/db/supabase";
 import { handleRouteError } from "@/lib/api/route-handler";
 import { getRole, priceForTier, TIER_LABELS } from "@/lib/employees/catalog";
 import type { AIEmployeeRow } from "@/lib/employees/types";
@@ -94,7 +94,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       status: "active"
     };
 
-    const { data, error } = await sb.from("ai_employees").insert(payload).select("*").single();
+    // Hiring writes billing columns (price, trial, billing_status): service role only,
+    // after the entitlement and seat checks above.
+    const { data, error } = await getServiceSupabase().from("ai_employees").insert(payload).select("*").single();
     if (error || !data) throw new Error(error?.message ?? "Failed to hire employee");
 
     const employee = data as AIEmployeeRow;
