@@ -79,10 +79,12 @@ export function SocialPostDrawer({ postId, onClose, onUpdated, onDeleted, onRest
       setPost(null);
       return;
     }
+    let current = true; // ignore a response for a post the merchant already navigated away from
     (async () => {
       setLoading(true);
       try {
         const data = await apiFetch<SocialPostDetail>(`/api/social/post/${postId}`);
+        if (!current) return;
         const targets = (data.platforms ?? []).filter(isPlatform);
         setPost(data);
         setHook(data.hook ?? "");
@@ -93,12 +95,16 @@ export function SocialPostDrawer({ postId, onClose, onUpdated, onDeleted, onRest
         setMedia(parsePostMedia(data.media));
         setImageUrl("");
       } catch (err) {
+        if (!current) return;
         toast(errorText(err, { ar: "تعذّر تحميل المنشور", en: "Failed to load post" }), "error");
         onClose();
       } finally {
-        setLoading(false);
+        if (current) setLoading(false);
       }
     })();
+    return () => {
+      current = false;
+    };
   }, [postId, onClose, toast]);
 
   const results = useMemo(() => parsePublishResults(post?.publish_results), [post]);

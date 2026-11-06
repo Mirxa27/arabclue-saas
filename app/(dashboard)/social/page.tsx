@@ -47,7 +47,8 @@ export default function SocialPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [view, setView] = useState<ViewMode>("list");
   const [statusFilter, setStatusFilter] = useState<FilterStatus>("all");
-  const [agentOn, setAgentOn] = useState<boolean | null>(null);
+  /** The merchant's social agent switch: null = unknown, exists = a row is stored. */
+  const [agent, setAgent] = useState<{ exists: boolean; on: boolean } | null>(null);
 
   useEffect(() => {
     if (merchantError) toast(merchantError, "error");
@@ -58,13 +59,16 @@ export default function SocialPage() {
     setPostsLoading(true);
     try {
       const sb = getBrowserSupabase();
-      const [{ data, error }, agent] = await Promise.all([
+      // The last 30 days onward: older history must not crowd new drafts out of the list.
+      const since = new Date(Date.now() - 30 * 86_400_000).toISOString();
+      const [{ data, error }, agentRow] = await Promise.all([
         sb
           .from("social_posts")
           .select("id, scheduled_for, platforms, hook, goal, status")
           .eq("merchant_id", merchant.id)
+          .gte("scheduled_for", since)
           .order("scheduled_for", { ascending: true })
-          .limit(120),
+          .limit(200),
         sb
           .from("agent_settings")
           .select("enabled, status")
@@ -74,8 +78,8 @@ export default function SocialPage() {
       ]);
       if (error) throw error;
       setPosts((data ?? []) as SocialPostSummary[]);
-      const row = agent.data as { enabled?: boolean; status?: string } | null;
-      setAgentOn(agent.error ? null : Boolean(row?.enabled && row.status !== "paused"));
+      const row = agentRow.data as { enabled?: boolean; status?: string } | null;
+      setAgent(agentRow.error ? null : { exists: Boolean(row), on: Boolean(row?.enabled && row.status !== "paused") });
     } catch (err) {
       toast(err instanceof Error ? err.message : "تعذّر تحميل المنشورات · Failed to load posts", "error");
     } finally {
@@ -139,6 +143,9 @@ export default function SocialPage() {
     );
   }
 
+  // Stable: the drawer reloads the post when this identity changes (it is an effect dependency).
+  const closeDrawer = useCallback(() => setSelectedId(null), []);
+
   const filtered = useMemo(
     () => (statusFilter === "all" ? posts : posts.filter((p) => p.status === statusFilter)),
     [posts, statusFilter]
@@ -194,7 +201,7 @@ export default function SocialPage() {
             }
           />
 
-          {agentOn === false && (
+          {agent && !agent.on && (agent.exists || summary.scheduled > 0) && (
             <div role="alert" className="flex items-start gap-3 rounded-xl border border-accent-warm/30 bg-accent-warm/5 p-4">
               <AlertTriangle size={16} className="mt-0.5 shrink-0 text-accent-warm-deep" aria-hidden />
               <p className="text-sm text-ink">
@@ -382,7 +389,7 @@ export default function SocialPage() {
 
       <SocialPostDrawer
         postId={selectedId}
-        onClose={() => setSelectedId(null)}
+        onClose={closeDrawer}
         onUpdated={handleUpdated}
         onDeleted={handleDeleted}
         onRestored={handleRestored}
