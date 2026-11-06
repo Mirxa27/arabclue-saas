@@ -42,3 +42,6 @@ next-env.d.ts
 # supabase
 supabase/.branches
 supabase/.temp
+
+# Agent worktrees (Claude Code workflows) — never commit
+.claude/worktrees/
