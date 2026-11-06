@@ -12,6 +12,7 @@ import { assertNoDbError } from "@/lib/db/errors";
 import { HttpError } from "@/lib/api/errors";
 import { featureGateMessage, merchantCanUseFeature } from "@/lib/billing/entitlements";
 import type { Merchant } from "@/lib/types/database";
+import { applyVoiceAgentPatch, voiceAgentState } from "@/lib/voice/agent-state";
 import {
   AGENT_SETTING_COLUMNS,
   buildAgentEntries,
@@ -32,11 +33,16 @@ export async function listAgentEntries(sb: SupabaseClient, merchantId: string): 
     .select(AGENT_SETTING_COLUMNS)
     .eq("merchant_id", merchantId);
   assertNoDbError(error, "Load agent settings", { merchantId, route: "agents/status" });
-  return buildAgentEntries((data ?? []) as AgentSettingRow[]);
+  const entries = buildAgentEntries((data ?? []) as AgentSettingRow[]);
+  // SW-21: the voice persona is the phone line — its state comes from what the call path reads.
+  const voice = await voiceAgentState(sb, merchantId);
+  return entries.map((entry) => (entry.role === "voice" ? { ...entry, ...voice } : entry));
 }
 
 /** Apply a dashboard toggle/configuration change. Enabling requires the plan feature. */
 export async function applyAgentPatch(merchant: Merchant, patch: AgentPatch): Promise<AgentEntry> {
+  // SW-21: switching سالم on/off is the voice line's own switch (voice_configs.enabled, same gates).
+  if (patch.role === "voice") return applyVoiceAgentPatch(merchant, patch);
   if (patchActivatesAgent(patch)) {
     const feature = featureForAgentRole(patch.role);
     if (!merchantCanUseFeature(merchant, feature)) {

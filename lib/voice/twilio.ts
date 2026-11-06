@@ -10,15 +10,40 @@ export type TwilioConfig = {
 };
 
 export function getTwilioConfig(): TwilioConfig | null {
-  const accountSid = process.env.TWILIO_ACCOUNT_SID;
-  const authToken = process.env.TWILIO_AUTH_TOKEN;
-  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL;
+  const accountSid = process.env.TWILIO_ACCOUNT_SID?.trim();
+  const authToken = process.env.TWILIO_AUTH_TOKEN?.trim();
+  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL?.trim().replace(/\/+$/, "");
   if (!accountSid || !authToken || !siteUrl) return null;
   return {
     accountSid,
     authToken,
     voiceWebhookUrl: `${siteUrl}/api/voice/twilio/inbound`
   };
+}
+
+/** The realtime media bridge (our telephony ↔ OpenAI Realtime relay). */
+export type VoiceBridgeConfig = {
+  /** wss:// URL Twilio streams the call audio to (<Connect><Stream url>). */
+  wsUrl: string;
+  /** Bearer secret the bridge presents to /api/voice/bridge/session and /api/voice/webhook. */
+  secret: string;
+};
+
+/**
+ * SW-42: a number may only be bought or switched on when calls can actually reach the agent:
+ * the stream URL (wss only — Twilio requires a secure WebSocket) AND the bridge secret, without
+ * which every tool call and session request of the bridge is refused (503).
+ */
+export function getVoiceBridgeConfig(): VoiceBridgeConfig | null {
+  const wsUrl = process.env.VOICE_BRIDGE_WS_URL?.trim();
+  const secret = process.env.VOICE_BRIDGE_SECRET?.trim();
+  if (!wsUrl || !secret) return null;
+  try {
+    if (new URL(wsUrl).protocol !== "wss:") return null;
+  } catch {
+    return null;
+  }
+  return { wsUrl, secret };
 }
 
 function authHeader(cfg: TwilioConfig): string {

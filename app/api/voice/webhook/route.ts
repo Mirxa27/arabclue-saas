@@ -7,8 +7,10 @@ export const dynamic = "force-dynamic";
 
 /**
  * Called by the telephony bridge when the Realtime model emits a function call.
- * Body: { merchantId, call: { name, arguments } }
- * Returns: { output } to be fed back to the model as the tool result.
+ * Body: { merchantId, callSid, call: { name, arguments } }
+ * Returns: { output } to be fed back to the model as the tool result; 403 { code: "voice_unavailable",
+ * output } when the call may no longer be answered; 404 { code: "unknown_call" } for a call that was
+ * not routed to that merchant.
  *
  * Auth: `Authorization: Bearer $VOICE_BRIDGE_SECRET` (503 when the secret is unset).
  */

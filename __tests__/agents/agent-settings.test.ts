@@ -140,7 +140,10 @@ describe("GET /api/agents/status", () => {
     expect(body.agents).toHaveLength(6);
     expect(body.agents.find((a) => a.role === "seo")!.enabled).toBe(true);
     expect(h.user.calls[0]).toMatchObject({ table: "agent_settings", op: "select" });
-    expect(h.service.calls).toHaveLength(0);
+    // merchant data through the session (RLS); the service role only reads the platform switches
+    // (the voice card reflects the agents.voice kill switch — SW-21, lib/voice/agent-state.ts)
+    expect(h.service.calls.map((c) => c.table)).toEqual(["platform_settings"]);
+    expect(h.service.writes()).toHaveLength(0);
   });
 
   it("returns a JSON 401 without a session", async () => {

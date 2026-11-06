@@ -1,5 +1,6 @@
 /**
  * F24 Twilio voice inbound + F05 voice bridge: both fail closed, verify before any DB work.
+ * (Call-time gate matrix: inbound-gate.test.ts; bridge session / tool gate: bridge.test.ts.)
  */
 import { createHmac } from "crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -15,7 +16,7 @@ vi.mock("@/lib/db/supabase", () => ({
 }));
 vi.mock("@/lib/voice/agent", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/voice/agent")>();
-  return { ...actual, dispatchVoiceTool: vi.fn(async () => ({ output: "حالة الطلب: تم الشحن." })) };
+  return { ...actual, dispatchVoiceTool: vi.fn(async () => ({ output: "حالة الطلب: تم الشحن.", outcome: "ok" })) };
 });
 vi.mock("@/lib/observability/error-reporter", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/observability/error-reporter")>();
@@ -30,6 +31,7 @@ const MERCHANT = "33333333-3333-4333-8333-333333333333";
 const TOKEN = "platform-twilio-auth-token";
 const SITE = "https://arabclue.test";
 const PATH = "/api/voice/twilio/inbound";
+const BRIDGE_SECRET = "bridge-secret-0123456789";
 
 function twilioSig(url: string, params: Record<string, string>, token = TOKEN) {
   const data = Object.keys(params)
@@ -47,7 +49,9 @@ const inbound = (params: Record<string, string>, sig: string | null) =>
 function useDb(config: { merchant_id: string; enabled: boolean } | null = { merchant_id: MERCHANT, enabled: true }) {
   h.db = createClaimDb((call) => {
     if (call.table === "voice_configs" && call.op === "select") return { data: config };
-    if (call.table === "merchants" && call.op === "select") return { data: { id: MERCHANT, seller_name: "متجر", access_token: "salla-token" } };
+    if (call.table === "merchants" && call.op === "select") {
+      return { data: { id: MERCHANT, seller_name: "متجر", plan: "plus", subscription_status: "active" } };
+    }
     return undefined;
   });
 }
@@ -64,7 +68,11 @@ afterEach(() => {
 });
 
 describe("POST /api/voice/twilio/inbound (F24)", () => {
-  it("a signed call gets the bridge TwiML and one voice.inbound_call event", async () => {
+  beforeEach(() => {
+    process.env.VOICE_BRIDGE_SECRET = BRIDGE_SECRET;
+  });
+
+  it("a signed call gets the bridge TwiML, one masked voice.inbound_call event and a call-log row", async () => {
     const params = callParams();
     const res = await voiceInbound(inbound(params, twilioSig(`${SITE}${PATH}`, params)));
     expect(res.status).toBe(200);
@@ -75,6 +83,12 @@ describe("POST /api/voice/twilio/inbound (F24)", () => {
     const events = h.db.appWrites().filter((c) => c.table === "events");
     expect(events).toHaveLength(1);
     expect(events[0].payload).toMatchObject({ kind: "voice.inbound_call", merchant: MERCHANT });
+    // SW-45: the platform log keeps a masked caller, never the number itself
+    expect(JSON.stringify(events[0].payload)).not.toContain("500000001");
+    expect((events[0].payload as { payload: Record<string, unknown> }).payload).toMatchObject({ caller: "•••• 0001", outcome: "bridged" });
+    const log = h.db.appWrites().filter((c) => c.table === "voice_calls");
+    expect(log).toHaveLength(1);
+    expect(log[0].payload).toMatchObject({ merchant_id: MERCHANT, call_sid: "CA1", caller_number: "+966500000001", outcome: "bridged" });
   });
 
   it("a Twilio retry of the same CallSid gets the same TwiML but no second event", async () => {
@@ -107,7 +121,7 @@ describe("POST /api/voice/twilio/inbound (F24)", () => {
     expect(h.db.calls).toEqual([]);
   });
 
-  it("an unknown or disabled number gets the 'unavailable' TwiML and no event", async () => {
+  it("an unknown number gets the 'unavailable' TwiML and no record at all", async () => {
     useDb(null);
     const params = callParams("CA2");
     const res = await voiceInbound(inbound(params, twilioSig(`${SITE}${PATH}`, params)));
@@ -131,7 +145,6 @@ describe("POST /api/voice/twilio/inbound (F24)", () => {
 });
 
 describe("POST /api/voice/webhook — bridge tool calls (F05)", () => {
-  const SECRET = "bridge-secret-0123456789";
   const call = { name: "lookup_order", arguments: { orderNumber: "1001" } };
   const bridge = (body: unknown, auth?: string) =>
     rawPost("https://arabclue.test/api/voice/webhook", typeof body === "string" ? body : JSON.stringify(body), {
@@ -147,36 +160,39 @@ describe("POST /api/voice/webhook — bridge tool calls (F05)", () => {
   });
 
   it("401 for a wrong or missing bearer token", async () => {
-    process.env.VOICE_BRIDGE_SECRET = SECRET;
+    process.env.VOICE_BRIDGE_SECRET = BRIDGE_SECRET;
     expect((await voiceBridge(bridge({ merchantId: MERCHANT, call }, "Bearer wrong"))).status).toBe(401);
     expect((await voiceBridge(bridge({ merchantId: MERCHANT, call }))).status).toBe(401);
     expect(h.db.calls).toEqual([]);
   });
 
   it("validates the body: merchantId must be a uuid, call a known tool with bounded arguments", async () => {
-    process.env.VOICE_BRIDGE_SECRET = SECRET;
-    const auth = `Bearer ${SECRET}`;
+    process.env.VOICE_BRIDGE_SECRET = BRIDGE_SECRET;
+    const auth = `Bearer ${BRIDGE_SECRET}`;
     expect((await voiceBridge(bridge({ merchantId: "../../x", call }, auth))).status).toBe(400);
     expect((await voiceBridge(bridge({ merchantId: MERCHANT, call: { name: "drop_tables", arguments: {} } }, auth))).status).toBe(400);
     const many = Object.fromEntries(Array.from({ length: 25 }, (_, i) => [`k${i}`, i]));
     expect((await voiceBridge(bridge({ merchantId: MERCHANT, call: { name: "lookup_order", arguments: many } }, auth))).status).toBe(400);
+    expect((await voiceBridge(bridge({ merchantId: MERCHANT, callSid: "not-a-sid", call }, auth))).status).toBe(400);
     expect((await voiceBridge(bridge("{not json", auth))).status).toBe(400);
     expect(dispatchVoiceTool).not.toHaveBeenCalled();
   });
 
   it("413 for an oversized body (after auth, before parsing)", async () => {
-    process.env.VOICE_BRIDGE_SECRET = SECRET;
-    const res = await voiceBridge(bridge(`{"pad":"${"x".repeat(70_000)}"}`, `Bearer ${SECRET}`));
+    process.env.VOICE_BRIDGE_SECRET = BRIDGE_SECRET;
+    const res = await voiceBridge(bridge(`{"pad":"${"x".repeat(70_000)}"}`, `Bearer ${BRIDGE_SECRET}`));
     expect(res.status).toBe(413);
     expect(dispatchVoiceTool).not.toHaveBeenCalled();
   });
 
-  it("dispatches an authorised tool call for that merchant", async () => {
-    process.env.VOICE_BRIDGE_SECRET = SECRET;
-    const res = await voiceBridge(bridge({ merchantId: MERCHANT, call }, `Bearer ${SECRET}`));
+  it("dispatches an authorised tool call for that merchant (no stored token passed around)", async () => {
+    process.env.VOICE_BRIDGE_SECRET = BRIDGE_SECRET;
+    const res = await voiceBridge(bridge({ merchantId: MERCHANT, call }, `Bearer ${BRIDGE_SECRET}`));
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ output: "حالة الطلب: تم الشحن." });
     expect(vi.mocked(dispatchVoiceTool).mock.calls[0][0]).toEqual(call);
-    expect(vi.mocked(dispatchVoiceTool).mock.calls[0][1]).toMatchObject({ merchantId: MERCHANT, accessToken: "salla-token" });
+    const ctx = vi.mocked(dispatchVoiceTool).mock.calls[0][1];
+    expect(ctx).toMatchObject({ merchantId: MERCHANT, callerNumber: null });
+    expect(ctx).not.toHaveProperty("accessToken");
   });
 });
