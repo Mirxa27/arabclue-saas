@@ -46,19 +46,15 @@ function merchant(plan: Merchant["plan"], status: Merchant["subscription_status"
   return {
     id: MERCHANT_ID,
     salla_merchant_id: null,
-    salla_state: null,
     store_url: null,
     seller_name: "Store",
     vat_number: null,
     cr_number: null,
     seller_address: null,
-    access_token: null,
-    refresh_token: null,
     token_expires_at: null,
     plan,
     subscription_status: status,
     owner_user_id: "u1",
-    zatca_csid: null,
     zatca_onboarded_at: null,
     installed_at: null,
     uninstalled_at: null
@@ -187,7 +183,9 @@ describe("PATCH /api/agents/status", () => {
 
 describe("updateAgentStatus (OAuth callbacks)", () => {
   it("writes agent_settings, not the ai_employees marketplace table", async () => {
-    await updateAgentStatus(MERCHANT_ID, "social", true);
+    // entitled merchant (plan gate: __tests__/agents/oauth-plan-gate.test.ts)
+    useClients((call) => (call.table === "merchants" ? { data: { plan: "plus", subscription_status: "active" } } : undefined));
+    await expect(updateAgentStatus(MERCHANT_ID, "social", true)).resolves.toBe(true);
     const [upsert] = h.service.writes();
     expect(upsert.table).toBe("agent_settings");
     expect(upsert.options).toEqual({ onConflict: "merchant_id,persona_role" });

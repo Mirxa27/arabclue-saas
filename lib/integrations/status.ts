@@ -4,7 +4,12 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { getFeatureSettings } from "@/lib/admin/platform-settings";
 import { sallaConnectEntry, type SallaConnectEntry } from "@/lib/salla/config";
-import { findClaimableSallaInstall, type PendingSallaInstall } from "@/lib/salla/connect";
+import {
+  findClaimableSallaInstall,
+  getSallaConnectionState,
+  type PendingSallaInstall,
+  type SallaConnectionState
+} from "@/lib/salla/connect";
 
 export const SOCIAL_STATUS_PLATFORMS = ["instagram", "whatsapp", "tiktok", "linkedin", "x", "snapchat"] as const;
 export type SocialStatusPlatform = (typeof SOCIAL_STATUS_PLATFORMS)[number];
@@ -28,15 +33,11 @@ export type IntegrationStatus = {
   social_oauth_enabled: boolean;
 };
 
-/** The merchant columns the status needs (the session's merchant row carries them). */
-export type StatusMerchant = {
-  id: string;
-  salla_merchant_id: string | null;
-  access_token: string | null;
-  uninstalled_at?: string | null;
-  salla_store_name?: string | null;
-  salla_token_invalid_at?: string | null;
-};
+/**
+ * The session's merchant (client columns only — no tokens). The Salla connection state is read
+ * with the service role by id (getSallaConnectionState), since authenticated cannot see tokens.
+ */
+export type StatusMerchant = { id: string };
 
 export type StatusUser = { email?: string | null; email_confirmed_at?: string | null };
 
@@ -54,8 +55,8 @@ export function socialOAuthConfigured(): IntegrationStatus["oauth_configured"] {
 }
 
 /** Linked store + live tokens + not uninstalled + not rejected by Salla. */
-export function isSallaConnected(m: StatusMerchant): boolean {
-  return Boolean(m.salla_merchant_id && m.access_token && !m.uninstalled_at && !m.salla_token_invalid_at);
+export function isSallaConnected(s: SallaConnectionState | null): boolean {
+  return Boolean(s?.storeId && s.hasTokens && !s.uninstalled && !s.tokenInvalid);
 }
 
 export async function getIntegrationStatus(args: {
@@ -63,7 +64,7 @@ export async function getIntegrationStatus(args: {
   user: StatusUser;
   /** The merchant's RLS-scoped session client (reads their own social_channels). */
   userClient: SupabaseClient;
-  /** Service role (salla_installs has no Data API grants for users). */
+  /** Service role (salla_installs and the merchants token columns have no Data API grants for users). */
   serviceClient: SupabaseClient;
 }): Promise<IntegrationStatus> {
   const { merchant, user } = args;
@@ -80,8 +81,9 @@ export async function getIntegrationStatus(args: {
     }
   }
 
-  const connected = isSallaConnected(merchant);
-  const reconnect = Boolean(merchant.salla_merchant_id && merchant.access_token && merchant.salla_token_invalid_at);
+  const salla = await getSallaConnectionState(args.serviceClient, merchant.id);
+  const connected = isSallaConnected(salla);
+  const reconnect = Boolean(salla?.storeId && salla.hasTokens && salla.tokenInvalid);
   // Only a confirmed email may claim an App Store install, and only while nothing is connected.
   const email = user.email_confirmed_at && user.email ? user.email : null;
   const pending = !connected && email ? await findClaimableSallaInstall(args.serviceClient, email) : null;
@@ -94,8 +96,8 @@ export async function getIntegrationStatus(args: {
     salla_install_url: entry.url,
     salla_connect_mode: entry.mode,
     salla_reconnect_required: reconnect,
-    salla_store: merchant.salla_merchant_id && (connected || reconnect)
-      ? { id: merchant.salla_merchant_id, name: merchant.salla_store_name ?? null }
+    salla_store: salla?.storeId && (connected || reconnect)
+      ? { id: salla.storeId, name: salla.storeName ?? null }
       : null,
     salla_pending_install: pending,
     channel_status: channelStatus,

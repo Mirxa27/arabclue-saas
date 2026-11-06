@@ -22,7 +22,10 @@ export function planIncludesFeature(plan: MerchantPlan, feature: ProductFeature)
 }
 
 /** Active or grace-period subscription required for paid modules (not billing/settings). */
-export function merchantCanUseFeature(merchant: Merchant, feature: ProductFeature): boolean {
+export function merchantCanUseFeature(
+  merchant: Pick<Merchant, "plan" | "subscription_status">,
+  feature: ProductFeature
+): boolean {
   if (!planIncludesFeature(merchant.plan ?? "lite", feature)) return false;
   const status = merchant.subscription_status ?? "pending";
   return status === "active" || status === "past_due";

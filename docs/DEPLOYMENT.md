@@ -119,6 +119,13 @@ let it exit rather than killing it, or in-flight replies are lost.
 
 **Migrations:** run `npm run db:push` (includes `0007_webhook_idempotency.sql` for webhook dedupe + `voice_configs.twilio_incoming_sid`).
 
+**Order for `20261106007000`–`20261106007300`:** deploy the app build that contains them first, then push them right away.
+`20261106007000_merchants_client_columns.sql` makes merchants SELECT column-scoped for signed-in users (the Salla tokens and
+the ZATCA CSID are service-role only): an older build reads merchants with `select *` and would treat every merchant as not
+onboarded. Until `…7100`/`…7200` exist, the new build answers 500 to PDPL export/erasure and to Salla `app.store.authorize` /
+`app.uninstalled` (Salla retries for ~15 minutes). `…7300` removes the plaintext Salla tokens old builds logged in `events`;
+Easy Mode installs made before it reconnect when the store authorizes the app again.
+
 If CLI reports *Remote migration versions not found in local migrations directory* (usually after applying SQL via Supabase Dashboard/MCP with timestamp IDs), repair history then push:
 
 ```bash

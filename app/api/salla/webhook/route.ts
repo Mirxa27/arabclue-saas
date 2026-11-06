@@ -10,7 +10,7 @@ import { mapSallaOrderToInvoice } from "@/lib/salla/order-invoice";
 import { handleAppStoreAuthorize, handleAppUninstalled, logSallaEvent } from "@/lib/salla/app-events";
 import { runWebhookOnce, sallaWebhookEventId } from "@/lib/webhooks/idempotency";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { Merchant, SellerAddress } from "@/lib/types/database";
+import type { MerchantRow, SellerAddress } from "@/lib/types/database";
 
 export const runtime = "nodejs";
 
@@ -94,7 +94,8 @@ async function handleOrderCreated(evt: SallaWebhookEvent, supabase: SupabaseClie
 
   if (merchantErr || !merchantRow) return;
 
-  const merchant = merchantRow as Merchant;
+  // service role: the full row, credentials included (zatca_csid below)
+  const merchant = merchantRow as MerchantRow;
 
   // Parse the documented order model (docs.salla.dev/doc-433804) and map it onto the invoice
   // input. A payload that does not reconcile with its own totals is recorded instead of invoiced:

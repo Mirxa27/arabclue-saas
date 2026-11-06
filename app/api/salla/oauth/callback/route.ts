@@ -57,6 +57,7 @@ export async function GET(req: NextRequest) {
         if (outcome !== "linked") throw new OAuthCallbackError("save_failed");
 
         try {
+          // Only switches the agent on when the merchant's plan includes the social module (RA-12).
           await updateAgentStatus(merchantId, "social", true);
         } catch {
           /* non-critical: the store is connected either way */

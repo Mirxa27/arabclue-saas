@@ -11,10 +11,14 @@ import type { PersonaRole } from "@/lib/agents/personas";
 import {
   createDefaultAgentState,
   agentReducer,
+  agentToggleErrorMessage,
+  agentToggleFailed,
   hydrateAgentState,
   type AgentStoreState,
   resolveAgentPersona,
 } from "@/lib/agents/store";
+
+const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 export interface AgentEntry {
   role: PersonaRole;
@@ -87,12 +91,15 @@ export function useAgents(): UseAgentsReturn {
       });
       if (!res.ok) {
         const errData = await res.json().catch(() => null);
-        throw new Error(errData?.error ?? errData?.detail ?? `HTTP ${res.status}`);
+        // 402 = plan gate: fixed bilingual copy (the API message is English only)
+        throw new Error(agentToggleErrorMessage(res.status, errData));
       }
     },
     [],
   );
 
+  // On failure, revert AND keep the reason in one action: a separate SET_ERROR followed by
+  // DISABLE/ENABLE lost the error (both clear lastError), so refused toggles looked like no-ops.
   const toggleAgent = useCallback(
     async (role: PersonaRole) => {
       const current = state.agents[role];
@@ -101,9 +108,7 @@ export function useAgents(): UseAgentsReturn {
       try {
         await patchAgent({ role, enabled: nextEnabled, status: nextEnabled ? "active" : "idle" });
       } catch (e) {
-        // Revert on failure
-        dispatch({ type: "SET_ERROR", role, error: e instanceof Error ? e.message : String(e) });
-        dispatch({ type: nextEnabled ? "DISABLE" : "ENABLE", role });
+        dispatch(agentToggleFailed(role, nextEnabled, errorText(e)));
       }
     },
     [state.agents, patchAgent],
@@ -115,8 +120,7 @@ export function useAgents(): UseAgentsReturn {
       try {
         await patchAgent({ role, enabled: true, status: "active" });
       } catch (e) {
-        dispatch({ type: "SET_ERROR", role, error: e instanceof Error ? e.message : String(e) });
-        dispatch({ type: "DISABLE", role });
+        dispatch(agentToggleFailed(role, true, errorText(e)));
       }
     },
     [patchAgent],
@@ -128,8 +132,7 @@ export function useAgents(): UseAgentsReturn {
       try {
         await patchAgent({ role, enabled: false, status: "idle" });
       } catch (e) {
-        dispatch({ type: "SET_ERROR", role, error: e instanceof Error ? e.message : String(e) });
-        dispatch({ type: "ENABLE", role });
+        dispatch(agentToggleFailed(role, false, errorText(e)));
       }
     },
     [patchAgent],

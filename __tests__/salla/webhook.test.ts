@@ -70,7 +70,8 @@ beforeEach(() => {
   reportError.mockReset();
   service = createFakeSupabase("service", handler, (fn) => {
     if (fn === "claim_webhook_event") return { data: state.claim };
-    if (fn === "salla_record_authorization") return { data: state.authorizeOutcome };
+    if (fn === "salla_apply_authorization") return { data: state.authorizeOutcome };
+    if (fn === "salla_record_uninstall") return { data: { outcome: "uninstalled" } };
     throw new Error(`unexpected rpc ${fn}`);
   });
   // user/info for the authorizing user — the documented sample, for the webhook's store
@@ -107,7 +108,7 @@ describe("POST /api/salla/webhook — authentication", () => {
     state.claim = "duplicate";
     const res = await POST(signed(authorizeEvent));
     expect(await res.json()).toEqual({ ok: true, duplicate: true });
-    expect(rpcCall("salla_record_authorization")).toBeUndefined();
+    expect(rpcCall("salla_apply_authorization")).toBeUndefined();
   });
 });
 
@@ -116,7 +117,7 @@ describe("app.store.authorize (Easy Mode, docs.salla.dev/doc-421413)", () => {
     const res = await POST(signed(authorizeEvent));
     expect(res.status).toBe(200);
 
-    const call = rpcCall("salla_record_authorization");
+    const call = rpcCall("salla_apply_authorization");
     expect(call?.args).toMatchObject({
       p_salla_merchant_id: String(authorizeEvent.merchant),
       p_expires_at: new Date(authorizeEvent.data.expires * 1000).toISOString(), // unix timestamp → 2021-10-21T12:31:24Z
@@ -140,14 +141,14 @@ describe("app.store.authorize (Easy Mode, docs.salla.dev/doc-421413)", () => {
   it("does not attach an installer from another store to this install", async () => {
     userInfoResponse = () => new Response(JSON.stringify(userInfo), { status: 200 }); // documented sample: store 847769313
     expect((await POST(signed(authorizeEvent))).status).toBe(200);
-    expect(rpcCall("salla_record_authorization")?.args).toMatchObject({ p_owner_email: null, p_owner_role: null });
+    expect(rpcCall("salla_apply_authorization")?.args).toMatchObject({ p_owner_email: null, p_owner_role: null });
   });
 
   it("keeps the tokens but fails the delivery when user/info is down, so Salla's retry can identify the owner", async () => {
     userInfoResponse = () => new Response("unavailable", { status: 503 });
     const res = await POST(signed(authorizeEvent));
     expect(res.status).toBe(500);
-    expect(decryptSecret(String(rpcCall("salla_record_authorization")?.args.p_access_token))).toBe(authorizeEvent.data.access_token);
+    expect(decryptSecret(String(rpcCall("salla_apply_authorization")?.args.p_access_token))).toBe(authorizeEvent.data.access_token);
     // the claim is released so the redelivery is processed, not swallowed as a duplicate
     const release = writes("webhook_events", "update").find((c) => (c.payload as { status?: string }).status === "failed");
     expect(release).toBeDefined();
@@ -163,26 +164,23 @@ describe("app.store.authorize (Easy Mode, docs.salla.dev/doc-421413)", () => {
   it("records (and does not retry) an authorize payload that is not the documented shape", async () => {
     const res = await POST(signed({ event: "app.store.authorize", merchant: 1, created_at: "x", data: { refresh_token: "rt-leak" } }));
     expect(res.status).toBe(200);
-    expect(rpcCall("salla_record_authorization")).toBeUndefined();
+    expect(rpcCall("salla_apply_authorization")).toBeUndefined();
     expect(eventRows().map((e) => e.kind)).toEqual(["salla.app.store.authorize.invalid"]);
     expect(JSON.stringify(eventRows())).not.toContain("rt-leak");
   });
 });
 
 describe("other app events", () => {
-  it("app.uninstalled clears the store's tokens and its parked install", async () => {
+  it("app.uninstalled clears the store's tokens and its parked install (one ordered SQL call)", async () => {
     expect((await POST(signed(uninstalledEvent))).status).toBe(200);
-    const update = writes("merchants", "update")[0];
-    expect(update.payload).toMatchObject({
-      access_token: null,
-      refresh_token: null,
-      token_expires_at: null,
-      salla_refresh_lease: null,
-      salla_token_invalid_at: null
+    // salla_record_uninstall clears the merchant's tokens + token-layer state and drops the parked
+    // install under the store lock, unless a newer authorization exists (RB-S2; semantics in
+    // supabase/tests/82_salla_lifecycle_ordering.test.sql)
+    expect(rpcCall("salla_record_uninstall")?.args).toEqual({
+      p_salla_merchant_id: String(uninstalledEvent.merchant),
+      p_event_at: "2022-12-31T09:31:25.000Z"
     });
-    expect((update.payload as { uninstalled_at?: string }).uninstalled_at).toBeTruthy();
-    expect(update.filters).toEqual([["eq", "salla_merchant_id", String(uninstalledEvent.merchant)]]);
-    expect(writes("salla_installs", "delete")[0].filters).toEqual([["eq", "salla_merchant_id", String(uninstalledEvent.merchant)]]);
+    expect(writes("merchants")).toHaveLength(0);
     expect(eventRows().map((e) => e.kind)).toEqual(["salla.uninstalled"]);
   });
 

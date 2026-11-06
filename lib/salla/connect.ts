@@ -1,13 +1,17 @@
 /**
  * Linking Salla stores to arabclue merchants (service role; tokens encrypted before they leave
- * the app). The SQL functions in supabase/migrations/20261106003000_salla_connect.sql do the
- * atomic part under a per-store lock:
+ * the app). The SQL functions in supabase/migrations/20261106003000_salla_connect.sql and
+ * 20261106007200_salla_lifecycle_ordering.sql do the atomic part under a per-store lock:
  *
  *   linkSallaStore              Custom Mode callback: the signed-in merchant just authorized the store
  *   recordSallaAuthorization    Easy Mode app.store.authorize: update the linked merchant, or park it
  *   claimSallaInstall           a parked authorization → the signed-in merchant, by confirmed owner email
  *   unlinkSallaStore            the merchant disconnects Salla in arabclue
  *   markSallaStoreUninstalled   Salla app.uninstalled (tokens revoked by Salla)
+ *
+ * Authorizations and uninstalls carry Salla's event time and are applied in event order (RB-S2):
+ * an uninstall older than the stored authorization, or an authorization older than an applied
+ * uninstall, is a late / retried delivery and changes nothing ('stale').
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
@@ -69,13 +73,21 @@ export type SallaAuthorizationOutcome =
 
 export async function recordSallaAuthorization(
   sb: SupabaseClient,
-  args: { storeId: string; tokens: EncryptedSallaTokens; scope: string | null; identity: SallaStoreIdentity | null }
+  args: {
+    storeId: string;
+    tokens: EncryptedSallaTokens;
+    scope: string | null;
+    identity: SallaStoreIdentity | null;
+    /** Salla's event time of the authorization (ISO); null = unknown (applied unordered). */
+    eventAt?: string | null;
+  }
 ): Promise<SallaAuthorizationOutcome> {
-  const { data, error } = await sb.rpc("salla_record_authorization", {
+  const { data, error } = await sb.rpc("salla_apply_authorization", {
     p_salla_merchant_id: args.storeId,
     p_access_token: args.tokens.accessToken,
     p_refresh_token: args.tokens.refreshToken,
     p_expires_at: args.tokens.expiresAt,
+    p_event_at: args.eventAt ?? null,
     p_scope: args.scope,
     p_owner_email: args.identity?.userEmail ?? null,
     p_owner_role: args.identity?.userRole ?? null,
@@ -145,6 +157,44 @@ export async function findClaimableSallaInstall(
     : null;
 }
 
+/** A merchant's Salla link and whether tokens are stored — never the tokens themselves. */
+export type SallaConnectionState = {
+  storeId: string | null;
+  storeName: string | null;
+  hasTokens: boolean;
+  uninstalled: boolean;
+  /** Salla rejected the stored refresh token: the merchant has to connect again. */
+  tokenInvalid: boolean;
+};
+
+/**
+ * Service role: the Salla connection state of `merchantId` (the session's merchant row has no
+ * token columns — authenticated cannot read them). Null when there is no such merchant.
+ */
+export async function getSallaConnectionState(sb: SupabaseClient, merchantId: string): Promise<SallaConnectionState | null> {
+  const { data, error } = await sb
+    .from("merchants")
+    .select("salla_merchant_id, salla_store_name, access_token, uninstalled_at, salla_token_invalid_at")
+    .eq("id", merchantId)
+    .maybeSingle();
+  if (error) throw new Error(`Salla connection lookup failed: ${error.message}`);
+  const row = data as {
+    salla_merchant_id: string | null;
+    salla_store_name: string | null;
+    access_token: string | null;
+    uninstalled_at: string | null;
+    salla_token_invalid_at: string | null;
+  } | null;
+  if (!row) return null;
+  return {
+    storeId: row.salla_merchant_id,
+    storeName: row.salla_store_name,
+    hasTokens: Boolean(row.access_token),
+    uninstalled: Boolean(row.uninstalled_at),
+    tokenInvalid: Boolean(row.salla_token_invalid_at)
+  };
+}
+
 /** Columns that hold or guard a live Salla connection. */
 const CLEARED_TOKEN_STATE = {
   access_token: null,
@@ -159,6 +209,8 @@ const CLEARED_TOKEN_STATE = {
  * Disconnect in arabclue: drop the tokens AND the store link, so the store's later webhooks
  * (orders, a re-authorization after an app update) no longer reach this merchant until the owner
  * connects or claims it again. Returns false when there was no merchant row.
+ * The store id stays in salla_store_links (trigger on merchants), so PDPL export / erasure still
+ * find the store's events (lib/merchant/pdpl.ts loadSallaStoreWindows).
  */
 export async function unlinkSallaStore(sb: SupabaseClient, merchantId: string, now = new Date()): Promise<boolean> {
   const { data, error } = await sb
@@ -176,16 +228,22 @@ export async function unlinkSallaStore(sb: SupabaseClient, merchantId: string, n
   return Array.isArray(data) && data.length > 0;
 }
 
+export type SallaUninstallOutcome = "uninstalled" | "stale";
+
 /**
  * Salla app.uninstalled: Salla revoked the tokens. The store link stays, so reinstalling the app
  * (app.store.authorize) reconnects the same merchant; a parked install for the store is dropped.
+ * One transaction under the store lock (salla_record_uninstall); 'stale' when an authorization
+ * newer than `eventAt` is already stored — a late or retried delivery must not wipe a reinstall.
  */
-export async function markSallaStoreUninstalled(sb: SupabaseClient, storeId: string, now = new Date()): Promise<void> {
-  const { error } = await sb
-    .from("merchants")
-    .update({ ...CLEARED_TOKEN_STATE, uninstalled_at: now.toISOString() })
-    .eq("salla_merchant_id", storeId);
-  if (error) throw new Error(`Salla uninstall update failed: ${error.message}`);
-  const { error: pendingError } = await sb.from("salla_installs").delete().eq("salla_merchant_id", storeId);
-  if (pendingError) throw new Error(`Salla pending install cleanup failed: ${pendingError.message}`);
+export async function markSallaStoreUninstalled(
+  sb: SupabaseClient,
+  storeId: string,
+  eventAt: string | null
+): Promise<SallaUninstallOutcome> {
+  const { data, error } = await sb.rpc("salla_record_uninstall", { p_salla_merchant_id: storeId, p_event_at: eventAt });
+  if (error) throw new Error(`salla_record_uninstall failed: ${error.message}`);
+  const { outcome } = outcomeOf("salla_record_uninstall", data);
+  if (outcome === "uninstalled" || outcome === "stale") return outcome;
+  throw new Error(`salla_record_uninstall returned outcome ${outcome}`);
 }

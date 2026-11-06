@@ -52,6 +52,8 @@ export type AgentAction =
   | { type: "PAUSE"; role: PersonaRole }
   | { type: "RESUME"; role: PersonaRole }
   | { type: "SET_ERROR"; role: PersonaRole; error: string }
+  /** A toggle the server refused: back to `enabled` (with its status) and the reason, in one step. */
+  | { type: "TOGGLE_FAILED"; role: PersonaRole; enabled: boolean; error: string }
   | { type: "CLEAR_ERROR"; role: PersonaRole }
   | { type: "UPDATE_OVERRIDES"; role: PersonaRole; overrides: AgentConfig["overrides"] }
   | { type: "HYDRATE"; state: AgentStoreState };
@@ -198,6 +200,20 @@ export function agentReducer(state: AgentStoreState, action: AgentAction): Agent
         },
       };
 
+    case "TOGGLE_FAILED":
+      return {
+        ...state,
+        agents: {
+          ...state.agents,
+          [action.role]: {
+            ...state.agents[action.role],
+            enabled: action.enabled,
+            status: action.enabled ? "active" : "idle",
+            lastError: action.error,
+          },
+        },
+      };
+
     case "CLEAR_ERROR":
       return {
         ...state,
@@ -226,6 +242,36 @@ export function agentReducer(state: AgentStoreState, action: AgentAction): Agent
     default:
       return state;
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Failed toggles (PATCH /api/agents/status)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Shown when switching an agent on is refused by the plan gate (402). The API's message is
+ * English only, so the card gets fixed bilingual copy instead.
+ */
+export const AGENT_PLAN_REQUIRED_MESSAGE =
+  "باقتك الحالية لا تشمل هذا الوكيل أو أن اشتراكك غير مفعّل — اختر باقة من صفحة الفوترة · " +
+  "Your plan does not include this agent or your subscription is not active — choose a plan on the Billing page.";
+
+/** The message to show for a failed PATCH /api/agents/status response. */
+export function agentToggleErrorMessage(status: number, body: unknown): string {
+  if (status === 402) return AGENT_PLAN_REQUIRED_MESSAGE;
+  const b = body && typeof body === "object" ? (body as { error?: unknown; detail?: unknown }) : null;
+  if (typeof b?.error === "string" && b.error.trim()) return b.error;
+  if (typeof b?.detail === "string" && b.detail.trim()) return b.detail;
+  return `HTTP ${status}`;
+}
+
+/**
+ * The single action for a refused toggle: revert to the state before the attempt and keep the
+ * reason visible. (Dispatching SET_ERROR and then ENABLE/DISABLE lost the error — both reducers
+ * clear lastError — so a 402 plan gate flipped the card back without a word.)
+ */
+export function agentToggleFailed(role: PersonaRole, attemptedEnabled: boolean, error: string): AgentAction {
+  return { type: "TOGGLE_FAILED", role, enabled: !attemptedEnabled, error };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

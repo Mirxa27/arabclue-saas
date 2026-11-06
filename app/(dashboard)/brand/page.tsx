@@ -10,6 +10,14 @@ import { getBrowserSupabase } from "@/lib/db/supabase-browser";
 import { useMerchant } from "@/hooks/use-merchant";
 import type { BrandKit } from "@/lib/types/database";
 import {
+  MAX_BRAND_ATTRIBUTES,
+  MAX_BRAND_ESSENCE,
+  MAX_BRAND_NAME,
+  MAX_BRAND_WORDS,
+  brandListError,
+  splitList,
+} from "@/lib/merchant/onboarding-schema";
+import {
   Palette,
   MessageSquareText,
   BookOpen,
@@ -28,13 +36,54 @@ const empty: BrandKit = {
   dialect: "khaliji",
 };
 
+// The three comma lists are edited as typed text (split on "," and "،" only when used), with the
+// same per-item (60) and list caps as POST /api/brand-kit.
+type ListField = "attributes" | "favor_words" | "avoid_words";
+const LIST_FIELDS: readonly ListField[] = ["attributes", "favor_words", "avoid_words"];
+const LIST_LIMITS: Record<ListField, number> = {
+  attributes: MAX_BRAND_ATTRIBUTES,
+  favor_words: MAX_BRAND_WORDS,
+  avoid_words: MAX_BRAND_WORDS,
+};
+const LIST_LABELS: Record<ListField, { ar: string; en: string }> = {
+  attributes: { ar: "سمات الصوت", en: "Voice attributes" },
+  favor_words: { ar: "كلمات مفضلة", en: "Favor words" },
+  avoid_words: { ar: "كلمات يُتجنَّب استخدامها", en: "Avoid words" },
+};
+type ListText = Record<ListField, string>;
+// older kits can hold NULL arrays
+const listText = (k: BrandKit): ListText => ({
+  attributes: (k.attributes ?? []).join(", "),
+  favor_words: (k.favor_words ?? []).join(", "),
+  avoid_words: (k.avoid_words ?? []).join(", "),
+});
+
+function ListIssue({ id, issue }: { id: string; issue: { ar: string; en: string } | null }) {
+  if (!issue) return null;
+  return (
+    <div id={id} role="alert" className="text-[11px] leading-relaxed text-danger">
+      <p className="font-arabic" dir="rtl">{issue.ar}</p>
+      <p>{issue.en}</p>
+    </div>
+  );
+}
+
 export default function BrandPage() {
   const { merchant, error: merchantError } = useMerchant();
   const { toast } = useToast();
   const [kit, setKit] = useState<BrandKit>(empty);
+  const [lists, setLists] = useState<ListText>(listText(empty));
   const [kitLoading, setKitLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [generating, setGenerating] = useState(false);
+
+  const items = (field: ListField) => splitList(lists[field], LIST_LIMITS[field]);
+  const issues: Record<ListField, { ar: string; en: string } | null> = {
+    attributes: brandListError(lists.attributes, LIST_LIMITS.attributes),
+    favor_words: brandListError(lists.favor_words, LIST_LIMITS.favor_words),
+    avoid_words: brandListError(lists.avoid_words, LIST_LIMITS.avoid_words),
+  };
+  const setList = (field: ListField, value: string) => setLists((prev) => ({ ...prev, [field]: value }));
 
   useEffect(() => {
     if (merchantError) toast(merchantError, "error");
@@ -55,7 +104,11 @@ export default function BrandPage() {
           .eq("merchant_id", merchant.id)
           .maybeSingle();
         if (error) throw error;
-        if (data) setKit({ ...empty, ...data });
+        if (data) {
+          const loaded: BrandKit = { ...empty, ...data };
+          setKit(loaded);
+          setLists(listText(loaded));
+        }
       } catch (err) {
         toast(err instanceof Error ? err.message : "Failed to load brand kit", "error");
       } finally {
@@ -65,12 +118,25 @@ export default function BrandPage() {
   }, [merchant, toast]);
 
   async function save() {
+    const invalid = LIST_FIELDS.find((field) => issues[field]);
+    if (invalid) {
+      const issue = issues[invalid]!;
+      toast(`${LIST_LABELS[invalid].ar}: ${issue.ar} · ${LIST_LABELS[invalid].en}: ${issue.en}`, "error");
+      return;
+    }
     setSaving(true);
     try {
+      const body: BrandKit = {
+        ...kit,
+        attributes: items("attributes"),
+        favor_words: items("favor_words"),
+        avoid_words: items("avoid_words"),
+      };
       await apiFetch("/api/brand-kit", {
         method: "POST",
-        body: JSON.stringify(kit),
+        body: JSON.stringify(body),
       });
+      setKit(body);
       toast("Brand kit saved", "success");
     } catch (err) {
       toast(err instanceof ApiClientError ? err.message : "Save failed", "error");
@@ -87,7 +153,9 @@ export default function BrandPage() {
         body: JSON.stringify({ brand_name: kit.brand_name }),
       });
       if (json?.kit) {
-        setKit({ ...kit, ...json.kit });
+        const generated: BrandKit = { ...kit, ...json.kit };
+        setKit(generated);
+        setLists(listText(generated));
         toast("Voice profile generated from brand name", "success");
       }
     } catch (err) {
@@ -154,6 +222,8 @@ export default function BrandPage() {
               <div className="space-y-5">
                 <Field label="Brand name">
                   <Input
+                    dir="auto"
+                    maxLength={MAX_BRAND_NAME}
                     value={kit.brand_name}
                     onChange={(e) => setKit({ ...kit, brand_name: e.target.value })}
                     placeholder="e.g., Bayt Al-Oud"
@@ -162,7 +232,9 @@ export default function BrandPage() {
 
                 <Field label="Essence" hint="One line describing what you sell and to whom.">
                   <Textarea
+                    dir="auto"
                     rows={2}
+                    maxLength={MAX_BRAND_ESSENCE}
                     value={kit.essence ?? ""}
                     onChange={(e) => setKit({ ...kit, essence: e.target.value })}
                     placeholder="Premium oud and bakhoor for Saudi households who appreciate tradition."
@@ -198,24 +270,20 @@ export default function BrandPage() {
               </CardHeader>
 
               <div className="space-y-5">
-                <Field label="Voice attributes" hint="3–7 traits, comma-separated (e.g., confident, warm, rooted-in-tradition)">
+                <Field label="Voice attributes" hint="3–7 traits, separated by , or ، (e.g., confident, warm, rooted-in-tradition)">
                   <Input
-                    value={kit.attributes.join(", ")}
-                    onChange={(e) =>
-                      setKit({
-                        ...kit,
-                        attributes: e.target.value
-                          .split(",")
-                          .map((s) => s.trim())
-                          .filter(Boolean),
-                      })
-                    }
+                    dir="auto"
+                    value={lists.attributes}
+                    onChange={(e) => setList("attributes", e.target.value)}
+                    aria-invalid={issues.attributes !== null}
+                    aria-describedby={issues.attributes ? "brand-attributes-error" : undefined}
                     placeholder="confident, warm, rooted-in-tradition"
                   />
+                  <ListIssue id="brand-attributes-error" issue={issues.attributes} />
                 </Field>
-                {kit.attributes.length > 0 && (
+                {items("attributes").length > 0 && (
                   <div className="flex flex-wrap gap-2">
-                    {kit.attributes.map((attr, i) => (
+                    {items("attributes").map((attr, i) => (
                       <span
                         key={i}
                         className="px-3 py-1.5 rounded-full text-xs font-medium bg-accent-warm/15 text-accent-warm-deep border border-accent-warm/25"
@@ -243,24 +311,20 @@ export default function BrandPage() {
               </CardHeader>
 
               <div className="space-y-5">
-                <Field label="Favor words" hint="Words your brand uses (comma-separated)">
+                <Field label="Favor words" hint="Words your brand uses (separated by , or ،)">
                   <Input
-                    value={kit.favor_words.join(", ")}
-                    onChange={(e) =>
-                      setKit({
-                        ...kit,
-                        favor_words: e.target.value
-                          .split(",")
-                          .map((s) => s.trim())
-                          .filter(Boolean),
-                      })
-                    }
-                    placeholder="أصالة, تراث, فخامة, عود, جودة"
+                    dir="auto"
+                    value={lists.favor_words}
+                    onChange={(e) => setList("favor_words", e.target.value)}
+                    aria-invalid={issues.favor_words !== null}
+                    aria-describedby={issues.favor_words ? "brand-favor-error" : undefined}
+                    placeholder="أصالة، تراث، فخامة، عود، جودة"
                   />
+                  <ListIssue id="brand-favor-error" issue={issues.favor_words} />
                 </Field>
-                {kit.favor_words.length > 0 && (
+                {items("favor_words").length > 0 && (
                   <div className="flex flex-wrap gap-2">
-                    {kit.favor_words.map((w, i) => (
+                    {items("favor_words").map((w, i) => (
                       <span
                         key={i}
                         className="px-3 py-1.5 rounded-full text-xs font-medium bg-accent/10 text-accent-deep border border-accent/20"
@@ -271,24 +335,20 @@ export default function BrandPage() {
                   </div>
                 )}
 
-                <Field label="Avoid words" hint="Words off-brand or off-limits (comma-separated)">
+                <Field label="Avoid words" hint="Words off-brand or off-limits (separated by , or ،)">
                   <Input
-                    value={kit.avoid_words.join(", ")}
-                    onChange={(e) =>
-                      setKit({
-                        ...kit,
-                        avoid_words: e.target.value
-                          .split(",")
-                          .map((s) => s.trim())
-                          .filter(Boolean),
-                      })
-                    }
-                    placeholder="رخيص, تقليد, سيء"
+                    dir="auto"
+                    value={lists.avoid_words}
+                    onChange={(e) => setList("avoid_words", e.target.value)}
+                    aria-invalid={issues.avoid_words !== null}
+                    aria-describedby={issues.avoid_words ? "brand-avoid-error" : undefined}
+                    placeholder="رخيص، تقليد، سيء"
                   />
+                  <ListIssue id="brand-avoid-error" issue={issues.avoid_words} />
                 </Field>
-                {kit.avoid_words.length > 0 && (
+                {items("avoid_words").length > 0 && (
                   <div className="flex flex-wrap gap-2">
-                    {kit.avoid_words.map((w, i) => (
+                    {items("avoid_words").map((w, i) => (
                       <span
                         key={i}
                         className="px-3 py-1.5 rounded-full text-xs font-medium bg-danger/10 text-danger border border-danger/20"
