@@ -54,6 +54,7 @@ Minimum bootstrap for first boot:
 | `CRON_SECRET` | Admin → Config |
 | `NEXT_PUBLIC_SALLA_INSTALL_URL` | Admin → Config (rebuild if changed) |
 | `TWILIO_*`, `SENTRY_DSN`, `UPSTASH_*` | Admin → Config (optional) |
+| `TRUSTED_PROXY_HOPS` | hPanel or Admin → Config (optional, default `1` — see §1.8) |
 
 ### 1.3 Cron jobs (Hostinger hPanel)
 
@@ -135,6 +136,46 @@ Operators configure agents, inspect env readiness, and test third-party connecti
 4. Use **Agents** to toggle social/voice/SEO agents and feature flags (stored in `platform_settings`).
 
 Admin API routes (session + platform-admin check): `GET/PATCH /api/admin/config`, `POST /api/admin/test`, `GET /api/admin/stats`, `/api/admin/merchants`, `/api/admin/events`.
+
+### 1.7 Supabase Auth (magic-link sign-in)
+
+Do this once per Supabase project, before the first merchant signs in (full steps and the
+Arabic + English email templates: [SETUP.md §3.3](./SETUP.md#33-configure-auth-magic-link-sign-in)):
+
+1. **Authentication → URL Configuration** — Site URL `https://arabclue.com` (same as
+   `NEXT_PUBLIC_SITE_URL`); Redirect URLs `https://arabclue.com/auth/callback**` and
+   `https://arabclue.com/auth/confirm**`.
+2. **Authentication → Email Templates** — Magic Link and Confirm signup link to
+   `{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=email&next=…`, so links work even
+   when a phone opens them in the mail app's browser.
+3. Configure custom SMTP (§3) — Supabase's built-in mailer is heavily rate-limited.
+
+Smoke test after deploy: request a link on `/login`, open it, and confirm you land on `/dashboard`
+(or `/welcome` for a new address). A broken link must end on `/login?error=…` with a readable
+message, never a 500.
+
+`/auth/*` and `/api/auth/*` are public routes (the middleware does not gate or refresh them). OAuth
+**start** links (`/api/oauth/*/start`, `/api/employees/:id/oauth/:kind/start`) send signed-out
+visitors to `/login?next=<start URL>`; callbacks only complete in the browser and account that
+started the flow (httpOnly `ac_oauth_<flow>` cookie, `__Host-` prefixed on https).
+
+### 1.8 Client IP for rate limiting (`TRUSTED_PROXY_HOPS`)
+
+Rate limits (OTP sign-in, OAuth starts, analytics, webhooks, billing intents) key on the client IP.
+The app never trusts the left-most `X-Forwarded-For` entry, which any client can set. Instead it
+takes the entry `TRUSTED_PROXY_HOPS` positions from the **right** — the address written by your
+outermost trusted proxy — then falls back to `X-Real-IP`, then `unknown`.
+
+| Deployment | `TRUSTED_PROXY_HOPS` |
+|---|---|
+| Hostinger Node.js (Passenger / LiteSpeed in front of Node) | `1` (default) |
+| Cloudflare (proxied DNS) → Hostinger | `2` |
+| Own nginx / Caddy → Node | `1` (the proxy must append `X-Forwarded-For`, e.g. `$proxy_add_x_forwarded_for`) |
+| Vercel | ignored — the platform header `x-vercel-forwarded-for` / `x-real-ip` is used |
+| Node exposed directly, no proxy (not recommended) | `0` — forwarding headers ignored; IP-keyed limits become shared by all clients |
+
+IPv6 clients are bucketed per `/64`. Limits on authenticated routes can key on the user or
+merchant id instead of the IP (`enforceRateLimit(req, scope, limit, windowMs, { identity })`).
 
 ---
 

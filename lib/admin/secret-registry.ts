@@ -73,6 +73,13 @@ export const SECRET_GROUPS: SecretGroupDef[] = [
         label: "Platform admin emails (comma-separated)",
         required: false,
         type: "emails"
+      },
+      {
+        key: "TRUSTED_PROXY_HOPS",
+        label: "Trusted proxy hops (client IP for rate limits)",
+        required: false,
+        type: "text",
+        hint: "Reverse proxies that append X-Forwarded-For. Hostinger/Passenger: 1 (default); Cloudflare → Hostinger: 2; ignored on Vercel"
       }
     ]
   },

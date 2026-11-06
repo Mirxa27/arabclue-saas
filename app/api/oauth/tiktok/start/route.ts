@@ -1,46 +1,35 @@
-export const dynamic = "force-dynamic";
-
-import { NextRequest, NextResponse } from "next/server";
-import { requireUser, getCurrentMerchant } from "@/lib/auth/session";
-import { createOAuthState } from "@/lib/oauth/state";
-import { generatePkcePair } from "@/lib/oauth/pkce";
+import { NextResponse, type NextRequest } from "next/server";
+import { requireMerchantForNavigation } from "@/lib/auth/browser-guard";
 import { buildTikTokAuthorizeURL } from "@/lib/tiktok/oauth";
+import { beginOAuthFlow, envValue, oauthStartFailure } from "@/lib/oauth/flow";
 import { handleRouteError } from "@/lib/api/route-handler";
 import { enforceRateLimit } from "@/lib/security/rate-limit";
 
-const PKCE_COOKIE = "oauth_pkce_tiktok";
+export const dynamic = "force-dynamic";
+
+const ROUTE = "GET /api/oauth/tiktok/start";
 
 export async function GET(req: NextRequest) {
   try {
     const limited = await enforceRateLimit(req, "oauth:start", 20, 60_000);
     if (limited instanceof NextResponse) return limited;
 
-    await requireUser();
-    const merchant = await getCurrentMerchant();
-    if (!merchant) return NextResponse.redirect(new URL("/welcome", req.url));
+    const session = await requireMerchantForNavigation(req);
+    if (!session.ok) return session.response;
 
-    const clientKey = process.env.TIKTOK_CLIENT_KEY;
-    if (!clientKey) return NextResponse.json({ error: "TIKTOK_CLIENT_KEY not configured" }, { status: 503 });
+    const clientKey = envValue("TIKTOK_CLIENT_KEY");
+    if (!clientKey) return oauthStartFailure("tiktok", "not_configured");
 
-    const { verifier, challenge } = generatePkcePair();
-    const state = createOAuthState({
-      merchantId: merchant.id,
+    // PKCE: the verifier stays in the httpOnly flow cookie, only the challenge leaves.
+    return beginOAuthFlow(req, {
+      flow: "tiktok",
+      merchantId: session.merchant.id,
       platform: "tiktok",
-      codeChallenge: challenge
+      pkce: true,
+      authorizeUrl: ({ state, codeChallenge }) =>
+        buildTikTokAuthorizeURL({ clientKey, state, codeChallenge: codeChallenge as string })
     });
-
-    const res = NextResponse.redirect(
-      buildTikTokAuthorizeURL({ clientKey, state, codeChallenge: challenge })
-    );
-    res.cookies.set(PKCE_COOKIE, verifier, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      maxAge: 600,
-      path: "/"
-    });
-    return res;
   } catch (err) {
-    return handleRouteError(err);
+    return handleRouteError(err, { route: ROUTE });
   }
 }

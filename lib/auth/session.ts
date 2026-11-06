@@ -1,5 +1,6 @@
 import { getServerSupabase } from "@/lib/db/supabase";
 import { redirect } from "next/navigation";
+import type { User } from "@supabase/supabase-js";
 import type { Merchant } from "@/lib/types/database";
 import { HttpError } from "@/lib/api/errors";
 
@@ -47,6 +48,20 @@ export async function requireMerchant() {
   const merchant = await getCurrentMerchant();
   if (!merchant) redirect("/welcome");
   return merchant;
+}
+
+/** The signed-in user and their merchant (if any), with a single auth round-trip. */
+export async function getSessionContext(): Promise<{ user: User | null; merchant: Merchant | null }> {
+  const supabase = await getServerSupabase();
+  const { data } = await supabase.auth.getUser();
+  const user = data.user ?? null;
+  if (!user) return { user: null, merchant: null };
+  const { data: merchant } = await supabase
+    .from("merchants")
+    .select("*")
+    .eq("owner_user_id", user.id)
+    .maybeSingle();
+  return { user, merchant: (merchant as Merchant | null) ?? null };
 }
 
 /**

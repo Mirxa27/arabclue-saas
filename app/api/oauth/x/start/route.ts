@@ -1,44 +1,35 @@
-export const dynamic = "force-dynamic";
-
-import { NextRequest, NextResponse } from "next/server";
-import { requireUser, getCurrentMerchant } from "@/lib/auth/session";
-import { createOAuthState } from "@/lib/oauth/state";
-import { generatePkcePair } from "@/lib/oauth/pkce";
+import { NextResponse, type NextRequest } from "next/server";
+import { requireMerchantForNavigation } from "@/lib/auth/browser-guard";
 import { buildXAuthorizeURL } from "@/lib/x/oauth";
+import { beginOAuthFlow, envValue, oauthStartFailure } from "@/lib/oauth/flow";
 import { handleRouteError } from "@/lib/api/route-handler";
 import { enforceRateLimit } from "@/lib/security/rate-limit";
 
-const PKCE_COOKIE = "oauth_pkce_x";
+export const dynamic = "force-dynamic";
+
+const ROUTE = "GET /api/oauth/x/start";
 
 export async function GET(req: NextRequest) {
   try {
     const limited = await enforceRateLimit(req, "oauth:start", 20, 60_000);
     if (limited instanceof NextResponse) return limited;
 
-    await requireUser();
-    const merchant = await getCurrentMerchant();
-    if (!merchant) return NextResponse.redirect(new URL("/welcome", req.url));
+    const session = await requireMerchantForNavigation(req);
+    if (!session.ok) return session.response;
 
-    const clientId = process.env.X_CLIENT_ID;
-    if (!clientId) return NextResponse.json({ error: "X_CLIENT_ID not configured" }, { status: 503 });
+    const clientId = envValue("X_CLIENT_ID");
+    if (!clientId) return oauthStartFailure("x", "not_configured");
 
-    const { verifier, challenge } = generatePkcePair();
-    const state = createOAuthState({
-      merchantId: merchant.id,
+    // PKCE: the verifier stays in the httpOnly flow cookie, only the challenge leaves.
+    return beginOAuthFlow(req, {
+      flow: "x",
+      merchantId: session.merchant.id,
       platform: "x",
-      codeChallenge: challenge
+      pkce: true,
+      authorizeUrl: ({ state, codeChallenge }) =>
+        buildXAuthorizeURL({ clientId, state, codeChallenge: codeChallenge as string })
     });
-
-    const res = NextResponse.redirect(buildXAuthorizeURL({ clientId, state, codeChallenge: challenge }));
-    res.cookies.set(PKCE_COOKIE, verifier, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      maxAge: 600,
-      path: "/"
-    });
-    return res;
   } catch (err) {
-    return handleRouteError(err);
+    return handleRouteError(err, { route: ROUTE });
   }
 }

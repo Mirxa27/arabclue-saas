@@ -1,27 +1,32 @@
-export const dynamic = "force-dynamic";
-
-import { NextRequest, NextResponse } from "next/server";
-import { requireUser, getCurrentMerchant } from "@/lib/auth/session";
-import { createOAuthState } from "@/lib/oauth/state";
+import { NextResponse, type NextRequest } from "next/server";
+import { requireMerchantForNavigation } from "@/lib/auth/browser-guard";
 import { buildLinkedInAuthorizeURL } from "@/lib/linkedin/oauth";
+import { beginOAuthFlow, envValue, oauthStartFailure } from "@/lib/oauth/flow";
 import { handleRouteError } from "@/lib/api/route-handler";
 import { enforceRateLimit } from "@/lib/security/rate-limit";
+
+export const dynamic = "force-dynamic";
+
+const ROUTE = "GET /api/oauth/linkedin/start";
 
 export async function GET(req: NextRequest) {
   try {
     const limited = await enforceRateLimit(req, "oauth:start", 20, 60_000);
     if (limited instanceof NextResponse) return limited;
 
-    await requireUser();
-    const merchant = await getCurrentMerchant();
-    if (!merchant) return NextResponse.redirect(new URL("/welcome", req.url));
+    const session = await requireMerchantForNavigation(req);
+    if (!session.ok) return session.response;
 
-    const clientId = process.env.LINKEDIN_CLIENT_ID;
-    if (!clientId) return NextResponse.json({ error: "LINKEDIN_CLIENT_ID not configured" }, { status: 503 });
+    const clientId = envValue("LINKEDIN_CLIENT_ID");
+    if (!clientId) return oauthStartFailure("linkedin", "not_configured");
 
-    const state = createOAuthState({ merchantId: merchant.id, platform: "linkedin" });
-    return NextResponse.redirect(buildLinkedInAuthorizeURL({ clientId, state }));
+    return beginOAuthFlow(req, {
+      flow: "linkedin",
+      merchantId: session.merchant.id,
+      platform: "linkedin",
+      authorizeUrl: ({ state }) => buildLinkedInAuthorizeURL({ clientId, state })
+    });
   } catch (err) {
-    return handleRouteError(err);
+    return handleRouteError(err, { route: ROUTE });
   }
 }

@@ -1,153 +1,130 @@
 "use client";
 
-import { useEffect, useState, useMemo } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { CheckCircle2, XCircle, Loader2, ArrowRight, ShieldCheck } from "lucide-react";
+import { ArrowRight, CheckCircle2, ShieldCheck, XCircle } from "lucide-react";
 import { Card } from "@/components/ui/primitives";
-import { platformMeta } from "@/lib/agents/personas";
-import type { PlatformSlug } from "@/lib/agents/personas";
+import { platformMeta, type PlatformSlug } from "@/lib/agents/personas";
+import { oauthErrorMessage } from "@/lib/oauth/errors";
+import { parseOAuthResult, type OAuthResultPlatform } from "@/lib/oauth/result";
 
-const STATUS_STEPS = [
-  { key: "state", label: "Verifying request integrity" },
-  { key: "exchange", label: "Exchanging authorization code" },
-  { key: "resolve", label: "Resolving account identity" },
-  { key: "persist", label: "Encrypting & storing credentials" },
-  { key: "done", label: "Connection established" },
-] as const;
+const REDIRECT_SECONDS = 3;
 
-type StepKey = (typeof STATUS_STEPS)[number]["key"];
+type Branding = { name: string; nameAr: string; color: string; icon: string };
 
-export default function OAuthCallbackPage() {
+const ARABIC_NAMES: Record<PlatformSlug, string> = {
+  salla: "سلة",
+  instagram: "إنستغرام",
+  whatsapp: "واتساب",
+  tiktok: "تيك توك",
+  linkedin: "لينكدإن",
+  x: "إكس",
+};
+
+const META_BRANDING: Branding = { name: "Instagram / WhatsApp", nameAr: "إنستغرام / واتساب", color: "#1877F2", icon: "∞" };
+const GENERIC_BRANDING: Branding = { name: "the integration", nameAr: "التكامل", color: "#6B7280", icon: "🔗" };
+
+function brandingFor(platform: OAuthResultPlatform | null): Branding {
+  if (!platform) return GENERIC_BRANDING;
+  if (platform === "meta") return META_BRANDING;
+  const meta = platformMeta[platform];
+  return meta ? { ...meta, nameAr: ARABIC_NAMES[platform] } : GENERIC_BRANDING;
+}
+
+/**
+ * Result page for merchant-level OAuth connects (Salla, Instagram/WhatsApp, TikTok, LinkedIn, X).
+ * Shows exactly what the callback reported: `status=success`, or the stable `error` code mapped
+ * to fixed Arabic + English text (unknown codes → generic message; URL text is never shown).
+ */
+function OAuthResult() {
   const router = useRouter();
   const params = useSearchParams();
-  const platform = (params.get("platform") as PlatformSlug) ?? "linkedin";
-  const meta = platformMeta[platform] ?? platformMeta.linkedin;
-
-  const [currentStep, setCurrentStep] = useState<StepKey>("state");
-  const [failed, setFailed] = useState(false);
-  const [countdown, setCountdown] = useState(3);
-
-  const stepOrder: StepKey[] = useMemo(() => ["state", "exchange", "resolve", "persist", "done"], []);
+  const result = useMemo(() => parseOAuthResult(params), [params]);
+  const brand = brandingFor(result.platform);
+  const successHref = result.platform ? `/integrations?connected=${result.platform}` : "/integrations";
+  const [countdown, setCountdown] = useState(REDIRECT_SECONDS);
 
   useEffect(() => {
-    const interval = setInterval(() => {
-      setCurrentStep((prev) => {
-        const idx = stepOrder.indexOf(prev);
-        if (idx < stepOrder.length - 1) return stepOrder[idx + 1];
-        return prev;
-      });
-    }, 900);
-    return () => clearInterval(interval);
-  }, [stepOrder]);
-
-  useEffect(() => {
-    if (currentStep === "done") {
-      const timer = setInterval(() => {
-        setCountdown((c) => {
-          if (c <= 1) {
-            clearInterval(timer);
-            router.replace("/integrations?connected=" + platform);
-            return 0;
-          }
-          return c - 1;
-        });
-      }, 1000);
-      return () => clearInterval(timer);
+    if (!result.ok) return;
+    if (countdown <= 0) {
+      router.replace(successHref);
+      return;
     }
-  }, [currentStep, platform, router]);
+    const timer = setTimeout(() => setCountdown((c) => c - 1), 1000);
+    return () => clearTimeout(timer);
+  }, [result.ok, countdown, router, successHref]);
+
+  const message = oauthErrorMessage(result.error);
 
   return (
     <div className="min-h-[70vh] flex items-center justify-center px-4">
       <Card className="w-full max-w-md p-8 text-center border-accent/20 bg-glass backdrop-blur-xl shadow-glass-xl">
-        {/* Platform Branding */}
-        <div className="mb-6">
-          <div
-            className="w-16 h-16 mx-auto rounded-2xl flex items-center justify-center text-2xl"
-            style={{ background: meta.color + "15", color: meta.color }}
-          >
-            {meta.icon}
-          </div>
-          <h2 className="mt-4 text-xl font-semibold text-ink">
-            Connecting {meta.name}
-          </h2>
-          <p className="text-xs text-ink-mute mt-1">
-            arabclue · Secure OAuth 2.0 PKCE flow
-          </p>
+        <div
+          className="w-16 h-16 mx-auto rounded-2xl flex items-center justify-center text-2xl"
+          style={{ background: brand.color + "15", color: brand.color }}
+          aria-hidden
+        >
+          {brand.icon}
         </div>
 
-        {/* Step Progress */}
-        <div className="space-y-3 mb-8">
-          {STATUS_STEPS.map((step) => {
-            const stepIdx = stepOrder.indexOf(step.key);
-            const currentIdx = stepOrder.indexOf(currentStep);
-            const isDone = stepIdx < currentIdx;
-            const isCurrent = stepIdx === currentIdx;
-            const isPending = stepIdx > currentIdx;
-
-            return (
-              <div
-                key={step.key}
-                className={`flex items-center gap-3 p-3 rounded-xl transition-all duration-500 ${
-                  isCurrent
-                    ? "bg-accent/10 border border-accent/30"
-                    : isDone
-                    ? "bg-emerald-500/5 border border-emerald-500/20"
-                    : "bg-transparent border border-rule/20"
-                }`}
-              >
-                <div className="w-6 h-6 flex items-center justify-center shrink-0">
-                  {isDone ? (
-                    <CheckCircle2 size={18} className="text-emerald-500" />
-                  ) : isCurrent ? (
-                    <Loader2 size={18} className="text-accent animate-spin" />
-                  ) : failed && stepIdx === currentIdx + 1 ? (
-                    <XCircle size={18} className="text-red-500" />
-                  ) : (
-                    <div className="w-4 h-4 rounded-full border-2 border-rule/40" />
-                  )}
-                </div>
-                <span
-                  className={`text-xs font-sans ${
-                    isDone
-                      ? "text-emerald-600"
-                      : isCurrent
-                      ? "text-accent font-medium"
-                      : "text-ink-mute"
-                  }`}
-                >
-                  {step.label}
-                </span>
-              </div>
-            );
-          })}
-        </div>
-
-        {/* Footer */}
-        {currentStep === "done" ? (
-          <div className="text-center space-y-3">
-            <div className="flex items-center justify-center gap-2 text-emerald-500">
-              <ShieldCheck size={18} />
-              <span className="text-sm font-semibold">Securely connected</span>
+        {result.ok ? (
+          <div className="mt-6 space-y-4" role="status">
+            <CheckCircle2 size={36} className="mx-auto text-emerald-500" aria-hidden />
+            <div className="space-y-1">
+              <h1 className="text-xl font-semibold text-ink font-arabic" dir="rtl" lang="ar">
+                تم ربط {brand.nameAr} بنجاح
+              </h1>
+              <p className="text-sm text-ink-soft">{brand.name === GENERIC_BRANDING.name ? "Connected." : `${brand.name} is connected.`}</p>
             </div>
-            <p className="text-xs text-ink-mute">
-              Redirecting in {countdown}s…
+            <p className="flex items-center justify-center gap-1.5 text-xs text-ink-mute">
+              <ShieldCheck size={14} aria-hidden /> Credentials are stored encrypted.
             </p>
+            <p className="text-xs text-ink-mute">Redirecting in {Math.max(countdown, 0)}s…</p>
             <button
-              onClick={() => router.replace("/integrations?connected=" + platform)}
+              type="button"
+              onClick={() => router.replace(successHref)}
               className="inline-flex items-center gap-1.5 text-xs font-semibold text-accent hover:text-accent-deep transition-colors"
             >
-              Go now <ArrowRight size={14} />
+              Continue <ArrowRight size={14} aria-hidden />
             </button>
           </div>
         ) : (
-          <div className="flex items-center justify-center gap-2 text-ink-mute">
-            <Loader2 size={14} className="animate-spin" />
-            <span className="text-[10px] font-mono uppercase tracking-wider">
-              Authenticating with {meta.name}
-            </span>
+          <div className="mt-6 space-y-4" role="alert">
+            <XCircle size={36} className="mx-auto text-red-500" aria-hidden />
+            <div className="space-y-1">
+              <h1 className="text-xl font-semibold text-ink font-arabic" dir="rtl" lang="ar">
+                تعذّر ربط {brand.nameAr}
+              </h1>
+              <p className="text-sm text-ink-soft">Couldn&apos;t connect {brand.name}.</p>
+            </div>
+            <div className="rounded-xl border border-rule/40 bg-paper/50 px-4 py-3 text-sm leading-relaxed space-y-1">
+              <p className="font-arabic text-ink" dir="rtl" lang="ar">
+                {message.ar}
+              </p>
+              <p className="text-ink-soft">{message.en}</p>
+            </div>
+            <div className="flex flex-wrap items-center justify-center gap-3 pt-1">
+              <Link
+                href="/integrations"
+                className="inline-flex items-center gap-1.5 rounded-full bg-ink px-4 py-2 text-xs font-semibold text-paper hover:opacity-90 transition-opacity"
+              >
+                <span className="font-arabic" lang="ar">حاول مرة أخرى</span>
+                <span aria-hidden>·</span>
+                Try again
+              </Link>
+            </div>
           </div>
         )}
       </Card>
     </div>
+  );
+}
+
+export default function OAuthCallbackPage() {
+  return (
+    <Suspense fallback={<div className="min-h-[70vh]" />}>
+      <OAuthResult />
+    </Suspense>
   );
 }

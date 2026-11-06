@@ -43,12 +43,87 @@ npx supabase link --project-ref <YOUR_REF>
 npx supabase db push
 ```
 
-### 3.3 Configure auth
+### 3.3 Configure auth (magic-link sign-in)
 
-- **Authentication → URL Configuration**:
-  - Site URL: `http://localhost:3000` (dev) / `https://arabclue.com` (prod)
-  - Redirect URLs: `http://localhost:3000/dashboard`, `https://arabclue.com/dashboard`, `https://arabclue.com/welcome`
-- **Authentication → Providers → Email**: enable Magic Link.
+Sign-in is passwordless. `POST /api/auth/otp` asks Supabase to email a link; the link lands on one of
+two routes that turn it into the cookie session and redirect to a validated relative `next` path
+(default `/dashboard`):
+
+| Route | Link shape | Works when |
+|---|---|---|
+| `/auth/confirm` | `?token_hash=…&type=email&next=…` (our email template, below) | **any** browser — including the mail app's in-app browser on phones |
+| `/auth/callback` | `?code=…&next=…` (Supabase's default template, PKCE) | only the browser that requested the link (it holds the PKCE code-verifier cookie) |
+
+Failures (expired / already-used link, link opened in another browser, Supabase `error=` params)
+redirect to `/login?error=<code>`, which shows a fixed Arabic + English message.
+
+1. **Authentication → URL Configuration**
+   - **Site URL**: `http://localhost:3000` (dev) / `https://arabclue.com` (prod). Must match
+     `NEXT_PUBLIC_SITE_URL` — the email template builds links from `{{ .SiteURL }}`.
+   - **Redirect URLs** (allow-list) — add for each environment:
+     - `http://localhost:3000/auth/callback**`, `http://localhost:3000/auth/confirm**`
+     - `https://arabclue.com/auth/callback**`, `https://arabclue.com/auth/confirm**`
+
+     The trailing `**` also matches the `?next=…` query the app appends. The old
+     `/dashboard` and `/welcome` entries are no longer needed.
+2. **Authentication → Providers → Email**: enabled (Magic Link / email OTP on).
+3. **Authentication → Email Templates** — replace the body of **Magic Link** (existing users)
+   and **Confirm signup** (first sign-in of a new address) so the link goes to `/auth/confirm`
+   with the token hash. Keep `{{ .TokenHash }}` exactly as written.
+
+   **Magic Link** — subject: `رابط الدخول إلى arabclue · Your arabclue sign-in link`
+
+   ```html
+   <div dir="rtl" lang="ar" style="font-family: Tahoma, Arial, sans-serif">
+     <h2>رابط الدخول إلى arabclue</h2>
+     <p>اضغط الزر أدناه لتسجيل الدخول. الرابط صالح لمدة ساعة ويُستخدم مرة واحدة.</p>
+     <p><a href="{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=email&next=/dashboard">تسجيل الدخول</a></p>
+     <p>إن لم تطلب هذا الرابط فتجاهل هذه الرسالة.</p>
+   </div>
+   <hr>
+   <div dir="ltr" lang="en" style="font-family: Arial, sans-serif">
+     <h2>Your arabclue sign-in link</h2>
+     <p>Click the button below to sign in. The link is valid for one hour and works once.</p>
+     <p><a href="{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=email&next=/dashboard">Sign in</a></p>
+     <p>If you didn't request this link, you can ignore this email.</p>
+   </div>
+   ```
+
+   **Confirm signup** — subject: `أكّد بريدك في arabclue · Confirm your arabclue email`
+
+   ```html
+   <div dir="rtl" lang="ar" style="font-family: Tahoma, Arial, sans-serif">
+     <h2>مرحبًا بك في arabclue</h2>
+     <p>اضغط الزر أدناه لتأكيد بريدك الإلكتروني وإكمال إنشاء حسابك.</p>
+     <p><a href="{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=email&next=/welcome">تأكيد البريد الإلكتروني</a></p>
+     <p>إن لم تنشئ حسابًا فتجاهل هذه الرسالة.</p>
+   </div>
+   <hr>
+   <div dir="ltr" lang="en" style="font-family: Arial, sans-serif">
+     <h2>Welcome to arabclue</h2>
+     <p>Click the button below to confirm your email address and finish creating your account.</p>
+     <p><a href="{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=email&next=/welcome">Confirm email</a></p>
+     <p>If you didn't create an account, you can ignore this email.</p>
+   </div>
+   ```
+
+   Supabase sends **Confirm signup** the first time an address signs in, so it lands on onboarding
+   (`/welcome`); returning users get **Magic Link** and land on `/dashboard`. `next` in a template
+   must be a relative path — absolute URLs (including `{{ .RedirectTo }}`) are ignored and fall back
+   to `/dashboard`.
+
+> Until the templates are changed, Supabase's default template still works through `/auth/callback`,
+> but only in the browser that requested the link. Magic links that were emailed before this change
+> (implicit flow, `#access_token=…`) are finished by `/login` and the landing page via `POST /auth/session`.
+
+Local smoke test (Supabase CLI stack, Mailpit on `:54324`):
+
+```bash
+# The endpoint only accepts same-origin JSON (as sent by the login page), hence the Origin header.
+curl -s -c jar -b jar -H 'content-type: application/json' -H 'origin: http://localhost:3000' \
+  -d '{"email":"you@example.com","mode":"login"}' http://localhost:3000/api/auth/otp
+# open the link from Mailpit with the same cookie jar → 303 to /dashboard with sb-* cookies
+```
 
 ---
 

@@ -1,16 +1,17 @@
-import { createServerClient } from "@supabase/ssr";
+import { createServerClient, type SetAllCookies } from "@supabase/ssr";
 import { NextRequest, NextResponse } from "next/server";
 import { userIsPlatformAdminEdge } from "@/lib/auth/platform-admin-edge";
+import {
+  DEFAULT_AFTER_LOGIN,
+  isAuthEndpointPath,
+  isSignInPagePath,
+  loginPath,
+  safeRedirectPath
+} from "@/lib/auth/redirect";
 import {
   isAdminProtectedPath,
   isMerchantProtectedPath,
 } from "@/lib/navigation/dashboard-nav";
-
-function safeRedirectPath(next: string | null): string | null {
-  if (!next || !next.startsWith("/") || next.startsWith("//")) return null;
-  if (next.startsWith("/login") || next.startsWith("/signup")) return null;
-  return next;
-}
 
 export async function middleware(req: NextRequest) {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -21,42 +22,53 @@ export async function middleware(req: NextRequest) {
     });
   }
 
-  const res = NextResponse.next({ request: req });
+  const { pathname, search } = req.nextUrl;
+
+  // /auth/* (code exchange, OTP verification, implicit-token rescue) and /api/auth/* create,
+  // replace or clear the session themselves and are always reachable without one. Refreshing
+  // the session here as well would race their Set-Cookie headers.
+  if (isAuthEndpointPath(pathname)) return NextResponse.next();
+
+  let res = NextResponse.next({ request: req });
   const supabase = createServerClient(supabaseUrl, supabaseAnonKey, {
     cookies: {
       getAll() {
         return req.cookies.getAll();
       },
-      setAll(items: { name: string; value: string; options?: Record<string, unknown> }[]) {
-        items.forEach((c) => res.cookies.set(c.name, c.value, c.options));
-      },
+      setAll: ((items) => {
+        // Refreshed tokens must reach both the page/route rendering this request (request
+        // cookies) and the browser (response cookies) — otherwise the next server-side
+        // getUser() refreshes again with an already-rotated refresh token.
+        items.forEach(({ name, value }) => req.cookies.set(name, value));
+        res = NextResponse.next({ request: req });
+        items.forEach(({ name, value, options }) => res.cookies.set(name, value, options));
+      }) satisfies SetAllCookies,
     },
   });
 
   const { data } = await supabase.auth.getUser();
-  const url = new URL(req.url);
-  const pathname = url.pathname;
+  const user = data.user;
 
-  const isAuthPage = pathname === "/login" || pathname === "/signup";
+  const redirectTo = (path: string) => {
+    const redirect = NextResponse.redirect(new URL(path, req.url));
+    // Keep refreshed (or cleared) session cookies when we redirect instead of rendering.
+    res.cookies.getAll().forEach((cookie) => redirect.cookies.set(cookie));
+    return redirect;
+  };
+
   const merchantProtected = isMerchantProtectedPath(pathname);
   const adminProtected = isAdminProtectedPath(pathname);
 
-  if ((merchantProtected || adminProtected) && !data.user) {
-    const redirectURL = new URL("/login", req.url);
-    redirectURL.searchParams.set("next", pathname);
-    return NextResponse.redirect(redirectURL);
+  if ((merchantProtected || adminProtected) && !user) {
+    return redirectTo(loginPath({ next: `${pathname}${search}` }));
   }
 
-  if (adminProtected && data.user && !userIsPlatformAdminEdge(data.user)) {
-    return NextResponse.redirect(new URL("/dashboard?admin=denied", req.url));
+  if (adminProtected && user && !userIsPlatformAdminEdge(user)) {
+    return redirectTo("/dashboard?admin=denied");
   }
 
-  if (isAuthPage && data.user) {
-    const next = safeRedirectPath(url.searchParams.get("next"));
-    if (next) {
-      return NextResponse.redirect(new URL(next, req.url));
-    }
-    return NextResponse.redirect(new URL("/dashboard", req.url));
+  if (isSignInPagePath(pathname) && user) {
+    return redirectTo(safeRedirectPath(req.nextUrl.searchParams.get("next")) ?? DEFAULT_AFTER_LOGIN);
   }
 
   return res;

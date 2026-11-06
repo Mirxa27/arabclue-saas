@@ -1,36 +1,37 @@
-export const dynamic = "force-dynamic";
-
-import { NextRequest, NextResponse } from "next/server";
-import { requireUser, getCurrentMerchant } from "@/lib/auth/session";
-import { createOAuthState } from "@/lib/oauth/state";
+import { NextResponse, type NextRequest } from "next/server";
+import { requireMerchantForNavigation } from "@/lib/auth/browser-guard";
 import { buildMetaAuthorizeURL, type MetaOAuthTarget } from "@/lib/meta/oauth";
+import { beginOAuthFlow, envValue, oauthStartFailure } from "@/lib/oauth/flow";
 import { handleRouteError } from "@/lib/api/route-handler";
 import { enforceRateLimit } from "@/lib/security/rate-limit";
+
+export const dynamic = "force-dynamic";
+
+const ROUTE = "GET /api/oauth/meta/start";
 
 export async function GET(req: NextRequest) {
   try {
     const limited = await enforceRateLimit(req, "oauth:start", 20, 60_000);
     if (limited instanceof NextResponse) return limited;
 
-    await requireUser();
-    const merchant = await getCurrentMerchant();
-    if (!merchant) {
-      return NextResponse.redirect(new URL("/welcome", req.url));
-    }
+    const session = await requireMerchantForNavigation(req);
+    if (!session.ok) return session.response;
 
-    const target = (new URL(req.url).searchParams.get("target") ?? "instagram") as MetaOAuthTarget;
+    const target = req.nextUrl.searchParams.get("target") ?? "instagram";
     if (target !== "instagram" && target !== "whatsapp") {
-      return NextResponse.json({ error: "invalid target" }, { status: 400 });
+      return oauthStartFailure("meta", "invalid_request");
     }
 
-    const appId = process.env.META_APP_ID;
-    if (!appId) return NextResponse.json({ error: "META_APP_ID not configured" }, { status: 503 });
+    const appId = envValue("META_APP_ID");
+    if (!appId) return oauthStartFailure(target, "not_configured");
 
-    const platform = target === "whatsapp" ? "whatsapp" : "instagram";
-    const state = createOAuthState({ merchantId: merchant.id, platform });
-    const url = buildMetaAuthorizeURL({ appId, state, target });
-    return NextResponse.redirect(url);
+    return beginOAuthFlow(req, {
+      flow: "meta",
+      merchantId: session.merchant.id,
+      platform: target,
+      authorizeUrl: ({ state }) => buildMetaAuthorizeURL({ appId, state, target: target as MetaOAuthTarget })
+    });
   } catch (err) {
-    return handleRouteError(err);
+    return handleRouteError(err, { route: ROUTE });
   }
 }

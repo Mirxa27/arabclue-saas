@@ -1,67 +1,35 @@
+import type { NextRequest } from "next/server";
+import { exchangeMetaCode, resolveInstagramAccount, resolveWhatsAppPhoneId } from "@/lib/meta/oauth";
+import { envConfigured, persistSocialConnection, runOAuthCallback } from "@/lib/oauth/flow";
+import { handleRouteError } from "@/lib/api/route-handler";
+
 export const dynamic = "force-dynamic";
 
-import { NextRequest, NextResponse } from "next/server";
-import { getServiceSupabase } from "@/lib/db/supabase";
-import { verifyOAuthState } from "@/lib/oauth/state";
-import { upsertSocialChannel } from "@/lib/oauth/channels";
-import {
-  exchangeMetaCode,
-  resolveInstagramAccount,
-  resolveWhatsAppPhoneId
-} from "@/lib/meta/oauth";
-import { updateAgentStatus } from "@/lib/agents/store-server";
+const ROUTE = "GET /api/oauth/meta/callback";
 
 export async function GET(req: NextRequest) {
-  const url = new URL(req.url);
-  const code = url.searchParams.get("code");
-  const stateRaw = url.searchParams.get("state");
-  const oauthError = url.searchParams.get("error");
-
-  if (oauthError || !code || !stateRaw) {
-    return NextResponse.redirect(new URL("/integrations/callback?platform=meta&status=error&error=missing_params", req.url));
-  }
-
-  let platform: string | undefined;
   try {
-    const state = verifyOAuthState(stateRaw);
-    if (state.platform !== "instagram" && state.platform !== "whatsapp") {
-      throw new Error("Invalid platform in OAuth state");
-    }
-    platform = state.platform;
-
-    const { accessToken, expiresIn } = await exchangeMetaCode(code);
-    const supabase = getServiceSupabase();
-
-    if (platform === "instagram") {
-      const { igUserId } = await resolveInstagramAccount(accessToken);
-      await upsertSocialChannel(supabase, state.merchantId, "instagram", {
-        externalId: igUserId,
-        accessToken,
-        tokenExpiresAt: expiresIn
-          ? new Date(Date.now() + expiresIn * 1000).toISOString()
-          : undefined
-      });
-    } else {
-      const phoneId = await resolveWhatsAppPhoneId(accessToken);
-      await upsertSocialChannel(supabase, state.merchantId, "whatsapp", {
-        externalId: phoneId,
-        accessToken,
-        tokenExpiresAt: expiresIn
-          ? new Date(Date.now() + expiresIn * 1000).toISOString()
-          : undefined
-      });
-    }
-
-    try {
-      await updateAgentStatus(state.merchantId, "social", true);
-    } catch { /* non-critical */ }
-
-    return NextResponse.redirect(
-      new URL(`/integrations/callback?platform=${platform}&status=success`, req.url)
-    );
+    return await runOAuthCallback(req, {
+      flow: "meta",
+      route: ROUTE,
+      statePlatforms: ["instagram", "whatsapp"],
+      fallbackPlatform: "meta",
+      isConfigured: () => envConfigured("META_APP_ID", "META_APP_SECRET"),
+      exchange: ({ code }) => exchangeMetaCode(code),
+      persist: ({ tokens, state, merchantId }) => {
+        const platform = state.platform === "whatsapp" ? "whatsapp" : "instagram";
+        return persistSocialConnection({
+          merchantId,
+          platform,
+          tokens: { accessToken: tokens.accessToken, expiresIn: tokens.expiresIn },
+          resolveExternalId: async () =>
+            platform === "instagram"
+              ? (await resolveInstagramAccount(tokens.accessToken)).igUserId
+              : resolveWhatsAppPhoneId(tokens.accessToken)
+        });
+      }
+    });
   } catch (err) {
-    console.error("Meta OAuth callback failed", err);
-    const cause = err instanceof Error ? err.message : "unknown_error";
-    return NextResponse.redirect(new URL(`/integrations/callback?platform=${platform ?? "meta"}&status=error&error=${encodeURIComponent(cause)}`, req.url));
+    return handleRouteError(err, { route: ROUTE });
   }
 }
