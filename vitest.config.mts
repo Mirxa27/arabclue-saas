@@ -19,7 +19,5 @@ export default defineConfig({
   },
   resolve: {
     alias: { "@": root }
-  },
-  // tsconfig keeps "jsx": "preserve" for Next; tests that import .tsx modules need it compiled.
-  oxc: { jsx: { runtime: "automatic" } }
+  }
 });
