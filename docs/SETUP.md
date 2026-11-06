@@ -209,6 +209,82 @@ All are **optional** at first run — the dashboard surfaces missing connections
 | LinkedIn | `LINKEDIN_ACTOR_URN`, `LINKEDIN_ACCESS_TOKEN` | Use Company Pages permissions. |
 | X | `X_BEARER` | OAuth 2.0 user context preferred for posting. |
 
+The Graph API version for every Meta call comes from `lib/meta/graph.ts` (default `v26.0`);
+override it with `META_GRAPH_VERSION` (env or `/admin/config`). After changing it, smoke-test
+Meta OAuth, an Instagram publish and a WhatsApp send.
+
+### 7.1 Webhook authentication (all fail closed)
+
+Every inbound webhook verifies the request before it parses or stores anything. A missing
+secret refuses the delivery (**503**) — there is no unauthenticated mode — and a wrong
+signature or token gets **403/401** with no database writes and no AI call. Retries are
+deduplicated (`webhook_events`), and slow AI work runs after the acknowledgement.
+
+| Webhook | Authenticated by | Secret lives in |
+|---|---|---|
+| `/api/billing/webhook` (Moyasar) | `secret_token` field in the body | `MOYASAR_WEBHOOK_SECRET` — set the **same value** as the webhook's *secret token* in the Moyasar dashboard |
+| `/api/meta/webhook` (platform Meta app) | `X-Hub-Signature-256` | `META_APP_SECRET` |
+| `/api/voice/twilio/inbound` | `X-Twilio-Signature` | `TWILIO_AUTH_TOKEN` |
+| `/api/voice/webhook` (telephony bridge) | `Authorization: Bearer` | `VOICE_BRIDGE_SECRET` |
+| `/api/social/inbound` (internal automation) | `Authorization: Bearer` | `SOCIAL_INBOUND_SECRET`, else `CRON_SECRET` |
+| `/api/employees/webhooks/whatsapp/{employeeId}` | `X-Hub-Signature-256` | the integration's `app_secret` (OAuth-connected: `META_APP_SECRET`) |
+| `/api/employees/webhooks/meta/{employeeId}` (Messenger + Instagram) | `X-Hub-Signature-256` | the integration's `app_secret` (else `META_APP_SECRET`) |
+| `/api/employees/webhooks/slack/{employeeId}` | `X-Slack-Signature` | the integration's `signing_secret`, else `SLACK_SIGNING_SECRET` |
+| `/api/employees/webhooks/telegram/{employeeId}` | `X-Telegram-Bot-Api-Secret-Token` | generated when the bot is connected |
+| `/api/employees/webhooks/sms/{employeeId}` | `X-Twilio-Signature` | the integration's `auth_token` |
+
+Twilio signs the exact URL it calls, so register Twilio webhooks with the same origin as
+`NEXT_PUBLIC_SITE_URL` (number provisioning does this automatically). Telegram webhooks are
+registered at `NEXT_PUBLIC_SITE_URL` when the bot is connected — connecting fails with 503
+until it is set.
+
+### 7.2 AI employee: Messenger + Instagram DMs (merchant's own Meta app)
+
+Each merchant connects their **own** Meta app (Meta delivers a Page's events only to the app
+that subscribed the Page, signed with that app's secret). One app serves both channels.
+
+1. In [developers.facebook.com](https://developers.facebook.com/apps) create a **Business** app
+   and add the **Messenger** and **Instagram** products.
+2. Request the permissions `pages_messaging`, `pages_manage_metadata`, `instagram_basic` and
+   `instagram_manage_messages`.
+3. **Publish** the app (Meta sends webhooks only to published apps). Until it has **Advanced
+   Access** (App Review + Business Verification) only people with a role on the app can DM it.
+4. Link the Instagram professional account to the Facebook Page, and in the Instagram app turn
+   on **Settings → Messages and story replies → Message controls → Connected tools → Allow access
+   to messages**. Without it Meta rejects every Instagram reply.
+5. **Conversation Routing:** in the Page's settings (Meta Business Suite → Settings →
+   Conversation routing) make this app the **default app** for Messenger and Instagram. On idle
+   threads only the default app may send, and while Meta Business AI owns a thread the app
+   only receives it on the standby channel — arabclue does not answer standby events.
+6. Generate a **Page access token** for the Page (Messenger → API Setup / Graph API Explorer).
+7. Connect the channel on the AI employee in arabclue (`POST /api/employees/{id}/integrations`
+   with kind `meta` for Messenger or `instagram` for Instagram Direct) with the Page ID, the Page
+   access token, the app's **App Secret** (App settings → Basic) and a verify token you choose
+   (16+ characters). arabclue checks the token really belongs to that Page, resolves the linked
+   Instagram account, subscribes the Page to `messages`, and returns the callback URL.
+8. In the Meta app's **Webhooks** settings, for both the **Page** and the **Instagram** objects,
+   set the callback URL to `https://<your-domain>/api/employees/webhooks/meta/{employeeId}` and
+   the same verify token, click **Verify and save**, then subscribe the field **`messages`**
+   (leave `message_echoes` and standby fields off). Save in arabclue first: the verification
+   request is refused until the integration exists.
+9. Send a DM from a tester account: one reply arrives. Echoes, receipts, reactions,
+   attachment-only messages and messages older than 23 h get no reply; threads a person has taken
+   over (escalated / snoozed / closed) are stored without an AI reply.
+
+If a reply fails because the connection is broken (expired token, missing permission, Instagram
+message access off), the integration is flagged `status = 'error'` with the reason in
+`config.error`; incoming DMs are still stored and the merchant reconnects to clear it.
+
+### 7.3 AI employee: WhatsApp, Slack, Telegram, SMS
+
+- **WhatsApp** (own app): enter `phone_number_id`, `access_token`, `verify_token` **and the
+  app's `app_secret`** — without the app secret inbound messages are refused (503). Callback:
+  `/api/employees/webhooks/whatsapp/{employeeId}`.
+- **Slack:** store the app's **signing secret** with the integration (or set `SLACK_SIGNING_SECRET`
+  for the platform Slack app). Request URL: `/api/employees/webhooks/slack/{employeeId}`.
+- **Telegram:** only the bot token is needed; the webhook and its secret are registered for you.
+- **SMS (Twilio):** the integration's Auth Token verifies `X-Twilio-Signature`.
+
 ---
 
 ## 8. Run locally

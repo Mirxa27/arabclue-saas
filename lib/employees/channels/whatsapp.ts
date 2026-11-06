@@ -5,10 +5,10 @@
  * access token (stored encrypted in ai_employee_integrations.credentials).
  * We use the official Cloud API — no third-party gateway.
  *
- * Webhook verification: see /app/api/employees/webhooks/whatsapp/route.ts.
+ * Inbound: /api/employees/webhooks/whatsapp/[id] verifies X-Hub-Signature-256 with
+ * the integration's `app_secret` (lib/employees/inbound/whatsapp.ts).
  */
-
-const GRAPH_VERSION = process.env.META_GRAPH_VERSION ?? "v21.0";
+import { graphUrl } from "@/lib/meta/graph";
 
 export type WhatsAppCredentials = {
   phone_number_id: string;
@@ -20,7 +20,10 @@ export type WhatsAppCredentials = {
 export type WhatsAppIncoming = {
   from: string;            // E.164 phone
   messageId: string;
+  /** Seconds since the epoch (WhatsApp's own unit). */
   timestamp: number;
+  /** The business number that received it (value.metadata.phone_number_id), when present. */
+  phoneNumberId?: string;
   type: "text" | "image" | "audio" | "document" | "button" | "interactive";
   text?: string;
   contactName?: string;
@@ -31,7 +34,7 @@ export type WhatsAppSendResult = {
 };
 
 function endpoint(phoneNumberId: string): string {
-  return `https://graph.facebook.com/${GRAPH_VERSION}/${phoneNumberId}/messages`;
+  return graphUrl([phoneNumberId, "messages"]);
 }
 
 export async function sendWhatsAppText(
@@ -102,14 +105,24 @@ export async function sendWhatsAppTemplate(
 export function parseWhatsAppWebhook(payload: unknown): WhatsAppIncoming[] {
   const out: WhatsAppIncoming[] = [];
   if (!payload || typeof payload !== "object") return out;
-  const entries = (payload as { entry?: unknown[] }).entry ?? [];
+  const rawEntries = (payload as { entry?: unknown }).entry;
+  const entries = Array.isArray(rawEntries) ? rawEntries : [];
   for (const entry of entries) {
-    const changes = (entry as { changes?: unknown[] }).changes ?? [];
+    const rawChanges = entry && typeof entry === "object" ? (entry as { changes?: unknown }).changes : undefined;
+    const changes = Array.isArray(rawChanges) ? rawChanges : [];
     for (const change of changes) {
+      if (!change || typeof change !== "object") continue;
       const value = (change as { value?: Record<string, unknown> }).value;
-      if (!value) continue;
-      const messages = (value.messages as unknown[] | undefined) ?? [];
-      const contacts = (value.contacts as Array<{ profile?: { name?: string }; wa_id?: string }> | undefined) ?? [];
+      if (!value || typeof value !== "object") continue;
+      const messages = Array.isArray(value.messages) ? (value.messages as unknown[]) : [];
+      const contacts = Array.isArray(value.contacts)
+        ? (value.contacts as Array<{ profile?: { name?: string }; wa_id?: string }>)
+        : [];
+      const metadata = value.metadata as { phone_number_id?: unknown } | undefined;
+      const phoneNumberId =
+        typeof metadata?.phone_number_id === "string" || typeof metadata?.phone_number_id === "number"
+          ? String(metadata.phone_number_id)
+          : undefined;
 
       for (const m of messages) {
         const msg = m as {
@@ -135,6 +148,7 @@ export function parseWhatsAppWebhook(payload: unknown): WhatsAppIncoming[] {
           from: msg.from,
           messageId: msg.id,
           timestamp: msg.timestamp ? Number(msg.timestamp) : Math.floor(Date.now() / 1000),
+          phoneNumberId,
           type,
           text,
           contactName

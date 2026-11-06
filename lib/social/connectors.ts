@@ -9,6 +9,7 @@
  */
 import type { Copy, PlatformConnector, VisualBrief, Platform } from "./types";
 import { decryptSecret } from "@/lib/crypto/secrets";
+import { graphUrl } from "@/lib/meta/graph";
 
 // Minimal fetch helper with retry + Saudi-friendly timeout (2G/3G fringes)
 async function postJSON(url: string, body: unknown, headers: Record<string, string> = {}) {
@@ -39,16 +40,15 @@ export function instagramConnector(args: { igUserId: string; accessToken: string
   return {
     platform: "instagram",
     async publish({ copy, visualBrief, productUrl, imageUrl }) {
-      const base = `https://graph.facebook.com/v20.0/${args.igUserId}`;
       const isCarousel = visualBrief?.layout === "carousel" && visualBrief.slides.length > 1;
 
       if (!isCarousel) {
-        const container = await postJSON(`${base}/media`, {
+        const container = await postJSON(graphUrl([args.igUserId, "media"]), {
           image_url: resolveImageUrl({ productUrl, imageUrl }),
           caption: copy.caption,
           access_token: args.accessToken
         });
-        const pub = await postJSON(`${base}/media_publish`, {
+        const pub = await postJSON(graphUrl([args.igUserId, "media_publish"]), {
           creation_id: container.id,
           access_token: args.accessToken
         });
@@ -58,20 +58,20 @@ export function instagramConnector(args: { igUserId: string; accessToken: string
       const children: string[] = [];
       for (const slide of visualBrief!.slides) {
         const slideImage = slide.imageUrl ?? imageUrl ?? resolveImageUrl({ productUrl, imageUrl });
-        const c = await postJSON(`${base}/media`, {
+        const c = await postJSON(graphUrl([args.igUserId, "media"]), {
           image_url: slideImage,
           is_carousel_item: true,
           access_token: args.accessToken
         });
         children.push(c.id);
       }
-      const carousel = await postJSON(`${base}/media`, {
+      const carousel = await postJSON(graphUrl([args.igUserId, "media"]), {
         media_type: "CAROUSEL",
         children: children.join(","),
         caption: copy.caption,
         access_token: args.accessToken
       });
-      const pub = await postJSON(`${base}/media_publish`, {
+      const pub = await postJSON(graphUrl([args.igUserId, "media_publish"]), {
         creation_id: carousel.id,
         access_token: args.accessToken
       });
@@ -158,7 +158,7 @@ export function whatsappConnector(args: { phoneNumberId: string; accessToken: st
       // Broadcast pattern using approved templates only — never send marketing as freeform.
       // Body is delivered via a pre-approved template referenced by name + variables.
       const res = await postJSON(
-        `https://graph.facebook.com/v20.0/${args.phoneNumberId}/messages`,
+        graphUrl([args.phoneNumberId, "messages"]),
         {
           messaging_product: "whatsapp",
           to: "broadcast",

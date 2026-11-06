@@ -4,8 +4,10 @@ import { requireMerchantApi } from "@/lib/auth/session";
 import { getServerSupabase } from "@/lib/db/supabase";
 import { handleRouteError } from "@/lib/api/route-handler";
 import { notFound } from "@/lib/api/errors";
-import { registerTelegramWebhook } from "@/lib/employees/channels/telegram";
+import { boundedRecord } from "@/lib/api/zod-bounds";
+import { metaWebhookUrl, prepareIntegrationConnect } from "@/lib/employees/connect";
 import {
+  decryptIntegrationCredentials,
   encryptIntegrationCredentials,
   redactIntegrationRow
 } from "@/lib/employees/credentials";
@@ -51,8 +53,8 @@ const KIND_VALUES = [
 const ConnectSchema = z.object({
   kind: z.enum(KIND_VALUES),
   external_id: z.string().max(200).optional().nullable(),
-  credentials: z.record(z.string(), z.unknown()).default({}),
-  config: z.record(z.string(), z.unknown()).default({})
+  credentials: boundedRecord(50, z.string().max(64), z.unknown()).default({}),
+  config: boundedRecord(50, z.string().max(64), z.unknown()).default({})
 });
 
 async function assertEmployeeOwned(id: string): Promise<string> {
@@ -92,25 +94,27 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     const body = ConnectSchema.parse(await req.json());
     const sb = await getServerSupabase();
 
-    const baseUrl = process.env.APP_BASE_URL ?? process.env.NEXT_PUBLIC_APP_URL ?? "https://arabclue.com";
-
-    // Side effect: for Telegram, register the webhook with Telegram's servers.
-    if (body.kind === "telegram") {
-      const token = (body.credentials as Record<string, unknown>).bot_token as string | undefined;
-      if (!token) return NextResponse.json({ error: "Telegram bot_token required" }, { status: 400 });
-      const webhookUrl = `${baseUrl}/api/employees/webhooks/telegram/${employeeId}`;
-      const secret = ((body.credentials as Record<string, unknown>).webhook_secret as string | undefined) ??
-        Math.random().toString(36).slice(2);
-      await registerTelegramWebhook({ bot_token: token, webhook_secret: secret }, webhookUrl, secret);
-      (body.credentials as Record<string, unknown>).webhook_secret = secret;
+    let existingCredentials: Record<string, unknown> | undefined;
+    if (body.kind === "instagram") {
+      const { data: existing } = await sb
+        .from("ai_employee_integrations")
+        .select("credentials")
+        .eq("employee_id", employeeId)
+        .eq("kind", body.kind)
+        .maybeSingle();
+      if (existing) existingCredentials = decryptIntegrationCredentials(existing.credentials as Record<string, unknown>);
     }
+
+    // Per-kind validation and side effects (Meta ownership proof + Page subscription,
+    // Telegram setWebhook) — lib/employees/connect.ts.
+    const prepared = await prepareIntegrationConnect(employeeId, body, { existingCredentials });
 
     const payload = {
       employee_id: employeeId,
       kind: body.kind,
-      external_id: body.external_id ?? null,
-      credentials: encryptIntegrationCredentials(body.credentials),
-      config: body.config,
+      external_id: prepared.external_id,
+      credentials: encryptIntegrationCredentials(prepared.credentials),
+      config: prepared.config,
       status: "connected" as const
     };
 
@@ -121,8 +125,10 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       .single();
 
     if (error || !data) throw new Error(error?.message ?? "Failed to save integration");
+    const webhookUrl = body.kind === "meta" || body.kind === "instagram" ? metaWebhookUrl(employeeId) : null;
     return NextResponse.json({
-      integration: redactIntegrationRow(data as { credentials?: Record<string, unknown> })
+      integration: redactIntegrationRow(data as { credentials?: Record<string, unknown> }),
+      ...(webhookUrl ? { webhook_url: webhookUrl } : {})
     });
   } catch (err) {
     return handleRouteError(err, { route: "POST /api/employees/:id/integrations" });

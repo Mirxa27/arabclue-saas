@@ -31,6 +31,7 @@
  */
 
 import type { IntegrationKind } from "@/lib/employees/types";
+import { facebookOAuthDialogUrl, graphUrl } from "@/lib/meta/graph";
 
 export type OAuthTokens = {
   access_token: string;
@@ -188,20 +189,20 @@ const PROVIDERS: OAuthProvider[] = [
     clientId: () => env("META_APP_ID"),
     clientSecret: () => env("META_APP_SECRET"),
     authorizeUrl({ state, redirectUri }) {
-      return `https://www.facebook.com/v21.0/dialog/oauth?${qs({
+      return facebookOAuthDialogUrl(new URLSearchParams(qs({
         client_id: env("META_APP_ID") ?? "",
         redirect_uri: redirectUri,
         state,
         scope: ["whatsapp_business_management", "whatsapp_business_messaging", "business_management"].join(",")
-      })}`;
+      })));
     },
     async exchange({ code, redirectUri }) {
-      const url = `https://graph.facebook.com/v21.0/oauth/access_token?${qs({
+      const url = graphUrl("oauth/access_token", new URLSearchParams(qs({
         client_id: env("META_APP_ID") ?? "",
         client_secret: env("META_APP_SECRET") ?? "",
         redirect_uri: redirectUri,
         code
-      })}`;
+      })));
       const res = await fetch(url);
       const j = (await res.json().catch(() => ({}))) as Record<string, unknown>;
       if (!res.ok) throw new Error(`Meta exchange failed: ${(j.error as { message?: string })?.message ?? res.statusText}`);
@@ -223,20 +224,20 @@ const PROVIDERS: OAuthProvider[] = [
     clientId: () => env("META_APP_ID"),
     clientSecret: () => env("META_APP_SECRET"),
     authorizeUrl({ state, redirectUri }) {
-      return `https://www.facebook.com/v21.0/dialog/oauth?${qs({
+      return facebookOAuthDialogUrl(new URLSearchParams(qs({
         client_id: env("META_APP_ID") ?? "",
         redirect_uri: redirectUri,
         state,
         scope: ["instagram_basic", "instagram_content_publish", "pages_show_list", "pages_manage_posts"].join(",")
-      })}`;
+      })));
     },
     async exchange({ code, redirectUri }) {
-      const url = `https://graph.facebook.com/v21.0/oauth/access_token?${qs({
+      const url = graphUrl("oauth/access_token", new URLSearchParams(qs({
         client_id: env("META_APP_ID") ?? "",
         client_secret: env("META_APP_SECRET") ?? "",
         redirect_uri: redirectUri,
         code
-      })}`;
+      })));
       const res = await fetch(url);
       const j = (await res.json().catch(() => ({}))) as Record<string, unknown>;
       if (!res.ok) throw new Error(`Meta exchange failed: ${(j.error as { message?: string })?.message ?? res.statusText}`);

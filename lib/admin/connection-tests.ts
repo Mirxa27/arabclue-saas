@@ -4,6 +4,7 @@ import { getServiceSupabase } from "@/lib/db/supabase";
 import { aiText } from "@/lib/ai/providers";
 import { createOAuthState, verifyOAuthState } from "@/lib/oauth/state";
 import { SALLA_AUTH_BASE } from "@/lib/salla/oauth";
+import { graphUrl } from "@/lib/meta/graph";
 import type { ConnectionTestResult, TestableService } from "@/lib/admin/types";
 
 async function timed<T>(fn: () => Promise<T>): Promise<{ result: T; latencyMs: number }> {
@@ -123,13 +124,15 @@ async function testSalla(): Promise<ConnectionTestResult> {
 }
 
 async function testMeta(): Promise<ConnectionTestResult> {
-  if (!process.env.META_APP_ID || !process.env.META_APP_SECRET) {
+  const appId = process.env.META_APP_ID;
+  const appSecret = process.env.META_APP_SECRET;
+  if (!appId || !appSecret) {
     return { ok: false, message: "META_APP_ID / META_APP_SECRET missing" };
   }
   try {
     const { latencyMs } = await timed(async () => {
       const res = await fetch(
-        `https://graph.facebook.com/v20.0/${process.env.META_APP_ID}?fields=id&access_token=${process.env.META_APP_ID}|${process.env.META_APP_SECRET}`,
+        graphUrl([appId], { fields: "id", access_token: `${appId}|${appSecret}` }),
         { signal: AbortSignal.timeout(15_000) }
       );
       const json = z.object({ id: z.string().optional(), error: z.object({ message: z.string() }).optional() }).parse(await res.json());

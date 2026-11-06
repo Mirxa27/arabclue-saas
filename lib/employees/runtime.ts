@@ -27,6 +27,9 @@ import type {
 } from "./types";
 import { decryptIntegrationCredentials } from "./credentials";
 import { dispatchChannelSend } from "./channels/dispatch";
+import { classifyMetaSendFailure } from "./channels/meta";
+import { markIntegrationError } from "./integration-store";
+import type { IntegrationErrorReason } from "./integration-errors";
 
 const MAX_CONTEXT_TURNS = 20;
 
@@ -81,14 +84,19 @@ export async function upsertConversation(args: {
   contactHandle?: string;
 }): Promise<AIConversationRow> {
   const sb = getServiceSupabase();
-  const { data: existing } = await sb
-    .from("ai_employee_conversations")
-    .select("*")
-    .eq("employee_id", args.employeeId)
-    .eq("channel", args.channel)
-    .eq("external_id", args.externalId)
-    .maybeSingle();
-  if (existing) return existing as AIConversationRow;
+  const findExisting = async () =>
+    (
+      await sb
+        .from("ai_employee_conversations")
+        .select("*")
+        .eq("employee_id", args.employeeId)
+        .eq("channel", args.channel)
+        .eq("external_id", args.externalId)
+        .maybeSingle()
+    ).data as AIConversationRow | null;
+
+  const existing = await findExisting();
+  if (existing) return existing;
 
   const { data: created, error } = await sb
     .from("ai_employee_conversations")
@@ -103,6 +111,12 @@ export async function upsertConversation(args: {
     })
     .select("*")
     .single();
+  if (error?.code === "23505") {
+    // Two deliveries from a new sender raced on unique (employee_id, channel, external_id):
+    // the other one created the thread first — use it.
+    const raced = await findExisting();
+    if (raced) return raced;
+  }
   if (error || !created) throw new Error(error?.message ?? "Failed to create conversation");
   return created as AIConversationRow;
 }
@@ -517,19 +531,92 @@ async function writeHeartbeat(
 
 // ─── Webhook helper: handle an inbound message end-to-end ────────────────
 
+/**
+ * Conversation states in which a human owns the thread (critic-17h): inbound
+ * messages are stored for the merchant, but the AI neither answers nor sends.
+ */
+export const HUMAN_TAKEOVER_STATUSES: ReadonlySet<AIConversationRow["status"]> = new Set([
+  "escalated",
+  "snoozed",
+  "closed"
+]);
+
+/** Why an inbound message was stored without an AI reply. */
+export type InboundStoreReason =
+  | "human_takeover"
+  /** The channel's integration is flagged status='error' — a reply could not be delivered. */
+  | "integration_error"
+  /** One sender exceeded the per-sender reply budget. */
+  | "sender_rate_limited";
+
+export type InboundMessageResult =
+  | {
+      handled: "replied";
+      conversationId: string;
+      reply: string;
+      messageId: string;
+      latencyMs: number;
+      /** False when the channel send failed (logged as a send_message failure). */
+      delivered: boolean;
+    }
+  | { handled: "stored"; conversationId: string; reason: InboundStoreReason };
+
+function isMetaChannel(kind: IntegrationKind): kind is "meta" | "instagram" {
+  return kind === "meta" || kind === "instagram";
+}
+
+/** A Meta send failure that breaks the whole channel flags the integration status='error'. */
+async function recordSendFailure(employeeId: string, kind: IntegrationKind, err: unknown): Promise<Record<string, unknown>> {
+  if (!isMetaChannel(kind)) return {};
+  const failure = classifyMetaSendFailure(err);
+  if (failure.scope === "integration") {
+    await markIntegrationError(employeeId, kind, {
+      reason: failure.reason as IntegrationErrorReason,
+      source: "send",
+      ...(failure.code !== undefined ? { graph_code: failure.code } : {}),
+      ...(failure.subcode !== undefined ? { graph_subcode: failure.subcode } : {}),
+      detail: failure.message,
+      at: new Date().toISOString()
+    });
+  }
+  return { reason: failure.reason, scope: failure.scope };
+}
+
 export async function handleInboundMessage(args: {
   employeeId: string;
   channel: IntegrationKind;
   externalId: string;
   text: string;
   contactName?: string;
-}): Promise<RespondResult> {
+  /** Store the message without running the AI (e.g. the channel integration is broken). */
+  storeOnly?: Exclude<InboundStoreReason, "human_takeover">;
+}): Promise<InboundMessageResult> {
   const conv = await upsertConversation({
     employeeId: args.employeeId,
     channel: args.channel,
     externalId: args.externalId,
     contactName: args.contactName
   });
+
+  const takeover = HUMAN_TAKEOVER_STATUSES.has(conv.status);
+  if (takeover || args.storeOnly) {
+    const reason: InboundStoreReason = takeover ? "human_takeover" : (args.storeOnly as InboundStoreReason);
+    await persistMessage({ conversationId: conv.id, role: "user", content: args.text });
+    const sb = getServiceSupabase();
+    await sb
+      .from("ai_employee_conversations")
+      .update({ unread_count: (conv.unread_count ?? 0) + 1 })
+      .eq("id", conv.id);
+    await logAction({
+      employeeId: args.employeeId,
+      action: "inbound_stored",
+      channel: args.channel,
+      target: args.externalId,
+      result: { reason, conversationId: conv.id },
+      status: "success"
+    });
+    return { handled: "stored", conversationId: conv.id, reason };
+  }
 
   const result = await respond({
     employeeId: args.employeeId,
@@ -538,6 +625,7 @@ export async function handleInboundMessage(args: {
   });
 
   // Send the reply back on the originating channel
+  let delivered = false;
   try {
     await sendOnChannel({
       employeeId: args.employeeId,
@@ -545,18 +633,20 @@ export async function handleInboundMessage(args: {
       to: args.externalId,
       body: result.reply
     });
+    delivered = true;
   } catch (err) {
+    const classified = await recordSendFailure(args.employeeId, args.channel, err);
     await logAction({
       employeeId: args.employeeId,
       action: "send_message",
       channel: args.channel,
       target: args.externalId,
-      result: { error: err instanceof Error ? err.message : String(err) },
+      result: { error: err instanceof Error ? err.message : String(err), ...classified },
       status: "failure"
     });
   }
 
-  return result;
+  return { handled: "replied", conversationId: conv.id, ...result, delivered };
 }
 
 export { logAction, persistMessage };
