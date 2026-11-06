@@ -1,95 +1,54 @@
 import { NextRequest, NextResponse } from "next/server";
-import { z } from "zod";
-import { requireUserApi, getCurrentMerchant } from "@/lib/auth/session";
-import { getServerSupabase } from "@/lib/db/supabase";
-import { generateProductCopy, generateBlogPost } from "@/lib/seo/copywriter";
-import { handleRouteError } from "@/lib/api/route-handler";
+import { requireMerchantApi } from "@/lib/auth/session";
+import { getServerSupabase, getServiceSupabase } from "@/lib/db/supabase";
+import { formatZodIssues, handleRouteError } from "@/lib/api/route-handler";
 import { merchantCanUseFeature, featureGateMessage } from "@/lib/billing/entitlements";
 import { getAgentSettings } from "@/lib/admin/platform-settings";
-import type { Product } from "@/lib/social/types";
-import type { SallaProduct } from "@/lib/types/database";
+import { enforceRateLimit } from "@/lib/security/rate-limit";
+import { generateSeoContent, SeoGenerateBodySchema } from "@/lib/seo/generate";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 export const maxDuration = 120;
 
-const RequestSchema = z.discriminatedUnion("kind", [
-  z.object({
-    kind: z.literal("product"),
-    productId: z.string(),
-    dialect: z.enum(["khaliji", "msa", "english"]).optional()
-  }),
-  z.object({
-    kind: z.literal("blog"),
-    topic: z.string().min(3),
-    primaryKeyword: z.string().min(2),
-    audience: z.string().optional(),
-    dialect: z.enum(["khaliji", "msa", "english"]).optional()
-  })
-]);
+const ROUTE = "POST /api/seo/generate";
 
+/**
+ * Generate Arabic (or English) SEO copy for a synced product or a blog brief.
+ * 401 signed out · 403 no merchant · 503 SEO switched off / provider not configurable ·
+ * 402 plan · 400 body · 429 rate limit (per merchant) or monthly quota · 404 product ·
+ * 502 the model failed (quota unit returned). See lib/seo/generate.ts for the response.
+ */
 export async function POST(req: NextRequest) {
   try {
-    await requireUserApi();
-    const merchant = await getCurrentMerchant();
-    if (!merchant) return NextResponse.json({ error: "no merchant" }, { status: 400 });
+    const merchant = await requireMerchantApi();
 
     const agents = await getAgentSettings();
     if (!agents.seo.enabled) {
-      return NextResponse.json({ error: "SEO agent is disabled platform-wide" }, { status: 503 });
+      return NextResponse.json(
+        { error: "وكيل السيو متوقف من إدارة المنصة · The SEO agent is disabled platform-wide" },
+        { status: 503 }
+      );
     }
     if (!merchantCanUseFeature(merchant, "seo")) {
       return NextResponse.json({ error: featureGateMessage("seo") }, { status: 402 });
     }
 
-    const body = RequestSchema.parse(await req.json());
-    const supabase = await getServerSupabase();
+    const limited = await enforceRateLimit(req, "seo:generate", 10, 10 * 60_000, { identity: merchant.id });
+    if (limited instanceof NextResponse) return limited;
 
-    if (body.kind === "product") {
-      const { data: row } = await supabase
-        .from("salla_products")
-        .select("*")
-        .eq("merchant_id", merchant.id)
-        .eq("salla_product_id", body.productId)
-        .maybeSingle();
-      if (!row) return NextResponse.json({ error: "product not found" }, { status: 404 });
+    const parsed = SeoGenerateBodySchema.safeParse(await req.json().catch(() => null));
+    if (!parsed.success) return NextResponse.json({ error: formatZodIssues(parsed.error) }, { status: 400 });
 
-      const productRow = row as SallaProduct;
-      const product: Product = {
-        id: productRow.salla_product_id,
-        name: productRow.name,
-        arabicName: productRow.arabic_name ?? undefined,
-        description: productRow.description ?? "",
-        price: Number(productRow.price ?? 0),
-        currency: "SAR",
-        category: productRow.category ?? "general",
-        imageUrl: productRow.image_url ?? undefined,
-        url: productRow.url ?? undefined
-      };
-
-      const copy = await generateProductCopy({ product, dialect: body.dialect, brandName: merchant.seller_name ?? undefined });
-      await supabase.from("seo_content").insert({
-        merchant_id: merchant.id,
-        kind: "product",
-        ref_id: body.productId,
-        payload: copy
-      });
-      return NextResponse.json({ ok: true, copy });
-    }
-
-    const post = await generateBlogPost({
-      topic: body.topic,
-      primaryKeyword: body.primaryKeyword,
-      audience: body.audience,
-      dialect: body.dialect
+    const result = await generateSeoContent({
+      merchant,
+      body: parsed.data,
+      settings: agents.seo,
+      userClient: await getServerSupabase(),
+      serviceClient: getServiceSupabase()
     });
-    await supabase.from("seo_content").insert({
-      merchant_id: merchant.id,
-      kind: "blog",
-      ref_id: post.slug,
-      payload: post
-    });
-    return NextResponse.json({ ok: true, post });
+    return NextResponse.json(result);
   } catch (err) {
-    return handleRouteError(err);
+    return handleRouteError(err, { route: ROUTE });
   }
 }

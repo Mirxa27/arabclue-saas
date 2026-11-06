@@ -6,7 +6,7 @@ import { Card, CardHeader, CardSubtitle, CardTitle, Field, Input, Badge } from "
 import { apiFetch, ApiClientError } from "@/lib/api/client";
 import { useToast } from "@/components/ui/toast";
 import { ConnectionTestButton } from "@/components/admin/connection-test-button";
-import type { AgentSettings, FeatureSettings } from "@/lib/admin/types";
+import type { AgentSettings, ConfigGroup, FeatureSettings } from "@/lib/admin/types";
 
 type SettingsResponse = {
   settings: {
@@ -14,12 +14,26 @@ type SettingsResponse = {
     features: FeatureSettings;
     updatedAt: string | null;
   };
+  groups?: ConfigGroup[];
 };
+
+/** What each kill switch does when it is off (enforced server-side, SW-17). */
+const FEATURE_FLAGS: ReadonlyArray<readonly [keyof FeatureSettings, string, string]> = [
+  ["billing", "Moyasar billing", "Off: new plan and AI-employee checkouts answer 503. Payments already made still confirm."],
+  ["zatca", "ZATCA invoicing", "Off: pauses ZATCA onboarding and Fatoora submissions (invoices are still generated)."],
+  ["wathq", "Wathq enrichment", "Off: CR lookups answer 503 and spend no Wathq quota."],
+  ["socialOAuth", "Social OAuth connect", "Off: merchants cannot connect new social accounts."]
+];
+
+function isConfigured(groups: ConfigGroup[] | undefined, key: string): boolean {
+  return Boolean(groups?.some((g) => g.vars.some((v) => v.key === key && v.configured)));
+}
 
 export function AdminAgentsClient() {
   const { toast } = useToast();
   const [agents, setAgents] = useState<AgentSettings | null>(null);
   const [features, setFeatures] = useState<FeatureSettings | null>(null);
+  const [humainConfigured, setHumainConfigured] = useState(false);
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -33,6 +47,7 @@ export function AdminAgentsClient() {
         const res = await apiFetch<SettingsResponse>("/api/admin/config");
         setAgents(res.settings.agents);
         setFeatures(res.settings.features);
+        setHumainConfigured(isConfigured(res.groups, "HUMAIN_API_BASE"));
       } catch (err) {
         // Never fall back to defaults here: saving them would reset the kill switches.
         setLoadError(err instanceof ApiClientError ? err.message : "Failed to load agent settings");
@@ -181,13 +196,19 @@ export function AdminAgentsClient() {
             />
             Enabled
           </label>
-          <Field label="Model">
+          <Field
+            label="Model"
+            hint="Used by POST /api/seo/generate. Global: an OpenAI model id (e.g. gpt-4o-mini) or a claude-… id (needs ANTHROPIC_API_KEY). KSA: a HUMAIN model id — OpenAI/Claude ids are not sent to HUMAIN and fall back to allam-b2b."
+          >
             <Input
               value={agents.seo.model}
               onChange={(e) => setAgents({ ...agents, seo: { ...agents.seo, model: e.target.value } })}
             />
           </Field>
-          <Field label="Data residency">
+          <Field
+            label="Data residency"
+            hint="Where SEO prompts (product data, brand names, blog briefs) are processed. KSA routes them to HUMAIN for in-Kingdom inference."
+          >
             <select
               className="w-full bg-paper border border-ink/15 px-3 py-2.5 text-sm"
               value={agents.seo.residency}
@@ -198,11 +219,21 @@ export function AdminAgentsClient() {
                 })
               }
             >
-              <option value="global">Global</option>
+              <option value="global">Global (OpenAI / Anthropic)</option>
               <option value="ksa">KSA (HUMAIN)</option>
-              <option value="eu">EU</option>
+              {agents.seo.residency === "eu" && <option value="eu">EU — not available (SEO answers 503)</option>}
             </select>
           </Field>
+          {agents.seo.residency === "ksa" && !humainConfigured && (
+            <p className="text-xs text-danger" role="alert">
+              HUMAIN_API_BASE is not set: SEO generation answers 503 until it is configured in /admin/config (AI providers).
+            </p>
+          )}
+          {agents.seo.residency === "eu" && (
+            <p className="text-xs text-danger" role="alert">
+              There is no EU inference route: SEO generation is refused while EU is selected. Choose Global or KSA.
+            </p>
+          )}
         </div>
       </Card>
 
@@ -210,22 +241,19 @@ export function AdminAgentsClient() {
         <CardHeader>
           <CardTitle>Feature flags</CardTitle>
         </CardHeader>
-        <div className="flex flex-wrap gap-4">
-          {(
-            [
-              ["billing", "Moyasar billing"],
-              ["zatca", "ZATCA invoicing"],
-              ["wathq", "Wathq enrichment"],
-              ["socialOAuth", "Social OAuth connect"]
-            ] as const
-          ).map(([key, label]) => (
-            <label key={key} className="flex items-center gap-2 text-sm">
+        <div className="grid gap-3 sm:grid-cols-2">
+          {FEATURE_FLAGS.map(([key, label, effect]) => (
+            <label key={key} className="flex items-start gap-2 text-sm">
               <input
                 type="checkbox"
+                className="mt-1"
                 checked={features[key]}
                 onChange={(e) => setFeatures({ ...features, [key]: e.target.checked })}
               />
-              {label}
+              <span>
+                {label}
+                <span className="block text-[11px] text-ink-mute">{effect}</span>
+              </span>
             </label>
           ))}
         </div>

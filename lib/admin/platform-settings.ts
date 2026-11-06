@@ -1,4 +1,5 @@
 import { getServiceSupabase } from "@/lib/db/supabase";
+import { HttpError } from "@/lib/api/errors";
 import { reportError } from "@/lib/observability/error-reporter";
 import type { AgentSettings, FeatureSettings } from "@/lib/admin/types";
 
@@ -37,6 +38,53 @@ export async function getAgentSettings(): Promise<AgentSettings> {
 
 export async function getFeatureSettings(): Promise<FeatureSettings> {
   return getPlatformSetting("features", DEFAULT_FEATURES);
+}
+
+/** An admin kill switch under /admin/agents → Feature flags. */
+export type PlatformFeature = keyof FeatureSettings;
+
+const FEATURE_OFF_MESSAGE: Record<PlatformFeature, { ar: string; en: string }> = {
+  billing: {
+    ar: "الدفع والاشتراكات متوقفة مؤقتاً من إدارة المنصة",
+    en: "Billing is temporarily disabled by the platform admin"
+  },
+  zatca: {
+    ar: "الفوترة الإلكترونية متوقفة مؤقتاً من إدارة المنصة",
+    en: "ZATCA invoicing is temporarily disabled by the platform admin"
+  },
+  wathq: {
+    ar: "خدمة واثق متوقفة مؤقتاً من إدارة المنصة",
+    en: "Wathq enrichment is disabled by the platform admin"
+  },
+  socialOAuth: {
+    ar: "ربط حسابات التواصل متوقف مؤقتاً من إدارة المنصة",
+    en: "Social account connections are disabled by the platform admin"
+  }
+};
+
+/** 503 for a request that needs a feature the platform admin switched off. */
+export class PlatformFeatureDisabledError extends HttpError {
+  readonly feature: PlatformFeature;
+  constructor(feature: PlatformFeature) {
+    const msg = FEATURE_OFF_MESSAGE[feature];
+    super(503, `${msg.ar} · ${msg.en}`, `${feature}_disabled`);
+    this.name = "PlatformFeatureDisabledError";
+    this.feature = feature;
+  }
+}
+
+export async function isPlatformFeatureEnabled(feature: PlatformFeature): Promise<boolean> {
+  const features = await getFeatureSettings();
+  return features[feature] !== false;
+}
+
+/**
+ * Throws PlatformFeatureDisabledError (503, handled by handleRouteError) when the admin
+ * switched `feature` off. A failed settings read keeps the defaults (on), as
+ * getPlatformSetting documents, and is reported.
+ */
+export async function requirePlatformFeature(feature: PlatformFeature): Promise<void> {
+  if (!(await isPlatformFeatureEnabled(feature))) throw new PlatformFeatureDisabledError(feature);
 }
 
 export async function updatePlatformSetting(key: string, value: Record<string, unknown>) {

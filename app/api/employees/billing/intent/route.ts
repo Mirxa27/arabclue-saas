@@ -5,6 +5,7 @@ import { handleRouteError } from "@/lib/api/route-handler";
 import { createEmployeeBillingIntent } from "@/lib/billing/employee-billing";
 import { getPublishableKey } from "@/lib/moyasar/client";
 import { enforceRateLimit } from "@/lib/security/rate-limit";
+import { requirePlatformFeature } from "@/lib/admin/platform-settings";
 
 const BodySchema = z.object({
   employeeId: z.string().uuid()
@@ -15,6 +16,8 @@ export const dynamic = "force-dynamic";
 export async function POST(req: NextRequest) {
   try {
     const merchant = await requireMerchantApi();
+    // Admin kill switch (SW-17): no new checkouts; confirm still applies paid intents.
+    await requirePlatformFeature("billing");
     const limited = await enforceRateLimit(req, "billing:employee-intent", 10, 60_000, merchant.id);
     if (limited instanceof NextResponse) return limited;
 

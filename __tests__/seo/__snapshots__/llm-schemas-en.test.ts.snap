@@ -1,0 +1,106 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`English SEO schemas (wire format) > BlogPostSchemaEn matches its pinned JSON Schema and the Arabic schema's shape 1`] = `
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+    "body": {
+      "description": "Full article in English markdown, 600-1000 words",
+      "type": "string",
+    },
+    "internalLinkSuggestions": {
+      "description": "Anchor texts to link internally",
+      "items": {
+        "type": "string",
+      },
+      "type": "array",
+    },
+    "keywords": {
+      "items": {
+        "type": "string",
+      },
+      "type": "array",
+    },
+    "metaDescription": {
+      "type": "string",
+    },
+    "outline": {
+      "description": "H2/H3 headings in English",
+      "items": {
+        "type": "string",
+      },
+      "type": "array",
+    },
+    "slug": {
+      "description": "URL slug: lowercase, hyphenated English",
+      "type": "string",
+    },
+    "title": {
+      "type": "string",
+    },
+  },
+  "required": [
+    "title",
+    "slug",
+    "metaDescription",
+    "outline",
+    "body",
+    "keywords",
+    "internalLinkSuggestions",
+  ],
+  "type": "object",
+}
+`;
+
+exports[`English SEO schemas (wire format) > ProductCopySchemaEn matches its pinned JSON Schema and the Arabic schema's shape 1`] = `
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+    "altText": {
+      "description": "Image alt text in English",
+      "type": "string",
+    },
+    "bullets": {
+      "description": "Key feature bullets in English",
+      "items": {
+        "type": "string",
+      },
+      "maxItems": 6,
+      "minItems": 3,
+      "type": "array",
+    },
+    "description": {
+      "description": "Product description, 120-220 words of natural English prose, scannable",
+      "type": "string",
+    },
+    "keywords": {
+      "description": "English keywords shoppers in Saudi Arabia and the GCC actually search",
+      "items": {
+        "type": "string",
+      },
+      "maxItems": 10,
+      "minItems": 4,
+      "type": "array",
+    },
+    "metaDescription": {
+      "description": "Meta description, 140-160 chars, English, with a soft CTA",
+      "type": "string",
+    },
+    "title": {
+      "description": "SEO title, ≤ 60 chars, English, includes the primary keyword naturally",
+      "type": "string",
+    },
+  },
+  "required": [
+    "title",
+    "metaDescription",
+    "description",
+    "bullets",
+    "keywords",
+    "altText",
+  ],
+  "type": "object",
+}
+`;
