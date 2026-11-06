@@ -1,0 +1,493 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`LLM structured-output schemas (wire format) > BlogPostSchema matches its pinned JSON Schema 1`] = `
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+    "body": {
+      "description": "Full article in Arabic markdown, 600-1000 words",
+      "type": "string",
+    },
+    "internalLinkSuggestions": {
+      "description": "Anchor texts to link internally",
+      "items": {
+        "type": "string",
+      },
+      "type": "array",
+    },
+    "keywords": {
+      "items": {
+        "type": "string",
+      },
+      "type": "array",
+    },
+    "metaDescription": {
+      "type": "string",
+    },
+    "outline": {
+      "description": "H2/H3 headings in Arabic",
+      "items": {
+        "type": "string",
+      },
+      "type": "array",
+    },
+    "slug": {
+      "description": "URL slug: lowercase, hyphenated, transliterated or English",
+      "type": "string",
+    },
+    "title": {
+      "type": "string",
+    },
+  },
+  "required": [
+    "title",
+    "slug",
+    "metaDescription",
+    "outline",
+    "body",
+    "keywords",
+    "internalLinkSuggestions",
+  ],
+  "type": "object",
+}
+`;
+
+exports[`LLM structured-output schemas (wire format) > CopySchema matches its pinned JSON Schema 1`] = `
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+    "altText": {
+      "description": "Accessibility alt text",
+      "type": "string",
+    },
+    "caption": {
+      "description": "The platform-ready caption with hashtags",
+      "type": "string",
+    },
+    "cta": {
+      "description": "Call-to-action phrase",
+      "type": "string",
+    },
+    "hashtags": {
+      "items": {
+        "type": "string",
+      },
+      "type": "array",
+    },
+  },
+  "required": [
+    "caption",
+    "altText",
+    "cta",
+    "hashtags",
+  ],
+  "type": "object",
+}
+`;
+
+exports[`LLM structured-output schemas (wire format) > PlannedPostSchema matches its pinned JSON Schema 1`] = `
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+    "goal": {
+      "enum": [
+        "awareness",
+        "consideration",
+        "conversion",
+        "engagement",
+        "retention",
+      ],
+      "type": "string",
+    },
+    "hook": {
+      "description": "One-line hook in the chosen dialect",
+      "type": "string",
+    },
+    "platforms": {
+      "items": {
+        "enum": [
+          "instagram",
+          "tiktok",
+          "x",
+          "snapchat",
+          "linkedin",
+          "whatsapp",
+        ],
+        "type": "string",
+      },
+      "type": "array",
+    },
+    "productIds": {
+      "description": "Salla product IDs referenced — empty for brand posts",
+      "items": {
+        "type": "string",
+      },
+      "type": "array",
+    },
+    "rationale": {
+      "description": "Why this post on this day — 1 sentence",
+      "type": "string",
+    },
+    "scheduledFor": {
+      "description": "ISO timestamp",
+      "type": "string",
+    },
+  },
+  "required": [
+    "scheduledFor",
+    "platforms",
+    "goal",
+    "productIds",
+    "hook",
+    "rationale",
+  ],
+  "type": "object",
+}
+`;
+
+exports[`LLM structured-output schemas (wire format) > PlannerOutputSchema matches its pinned JSON Schema 1`] = `
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+    "posts": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "goal": {
+            "enum": [
+              "awareness",
+              "consideration",
+              "conversion",
+              "engagement",
+              "retention",
+            ],
+            "type": "string",
+          },
+          "hook": {
+            "description": "One-line hook in the chosen dialect",
+            "type": "string",
+          },
+          "platforms": {
+            "items": {
+              "enum": [
+                "instagram",
+                "tiktok",
+                "x",
+                "snapchat",
+                "linkedin",
+                "whatsapp",
+              ],
+              "type": "string",
+            },
+            "type": "array",
+          },
+          "productIds": {
+            "description": "Salla product IDs referenced — empty for brand posts",
+            "items": {
+              "type": "string",
+            },
+            "type": "array",
+          },
+          "rationale": {
+            "description": "Why this post on this day — 1 sentence",
+            "type": "string",
+          },
+          "scheduledFor": {
+            "description": "ISO timestamp",
+            "type": "string",
+          },
+        },
+        "required": [
+          "scheduledFor",
+          "platforms",
+          "goal",
+          "productIds",
+          "hook",
+          "rationale",
+        ],
+        "type": "object",
+      },
+      "maxItems": 40,
+      "minItems": 8,
+      "type": "array",
+    },
+  },
+  "required": [
+    "posts",
+  ],
+  "type": "object",
+}
+`;
+
+exports[`LLM structured-output schemas (wire format) > ProductCopySchema matches its pinned JSON Schema 1`] = `
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+    "altText": {
+      "description": "Image alt text in Arabic",
+      "type": "string",
+    },
+    "bullets": {
+      "description": "Key feature bullets in Arabic",
+      "items": {
+        "type": "string",
+      },
+      "maxItems": 6,
+      "minItems": 3,
+      "type": "array",
+    },
+    "description": {
+      "description": "Product description, 120-220 words of native Arabic prose, scannable",
+      "type": "string",
+    },
+    "keywords": {
+      "description": "Arabic + transliterated keywords KSA shoppers actually search",
+      "items": {
+        "type": "string",
+      },
+      "maxItems": 10,
+      "minItems": 4,
+      "type": "array",
+    },
+    "metaDescription": {
+      "description": "Meta description, 140-160 chars, Arabic, with a soft CTA",
+      "type": "string",
+    },
+    "title": {
+      "description": "SEO title, ≤ 60 chars, Arabic, includes the primary keyword naturally",
+      "type": "string",
+    },
+  },
+  "required": [
+    "title",
+    "metaDescription",
+    "description",
+    "bullets",
+    "keywords",
+    "altText",
+  ],
+  "type": "object",
+}
+`;
+
+exports[`LLM structured-output schemas (wire format) > ReplyDecisionSchema matches its pinned JSON Schema 1`] = `
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+    "action": {
+      "enum": [
+        "reply",
+        "react",
+        "escalate",
+        "ignore",
+      ],
+      "type": "string",
+    },
+    "reason": {
+      "type": "string",
+    },
+    "reply": {
+      "type": "string",
+    },
+  },
+  "required": [
+    "action",
+    "reason",
+  ],
+  "type": "object",
+}
+`;
+
+exports[`LLM structured-output schemas (wire format) > ToolDecisionSchema matches its pinned JSON Schema 1`] = `
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+    "body": {
+      "maxLength": 4000,
+      "type": "string",
+    },
+    "calendar_attendees": {
+      "items": {
+        "format": "email",
+        "pattern": "^(?:[A-Za-z0-9_'+\\-]+\\.)*[A-Za-z0-9_'+\\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
+        "type": "string",
+      },
+      "maxItems": 20,
+      "type": "array",
+    },
+    "calendar_end": {
+      "type": "string",
+    },
+    "calendar_start": {
+      "type": "string",
+    },
+    "calendar_summary": {
+      "maxLength": 200,
+      "type": "string",
+    },
+    "channel": {
+      "enum": [
+        "whatsapp",
+        "telegram",
+        "slack",
+        "email",
+        "gmail",
+        "twilio_sms",
+        "webhook",
+        "meta",
+        "instagram",
+      ],
+      "type": "string",
+    },
+    "followup_in_minutes": {
+      "maximum": 43200,
+      "minimum": 5,
+      "type": "integer",
+    },
+    "human_reason": {
+      "maxLength": 400,
+      "type": "string",
+    },
+    "invoice_buyer_phone": {
+      "maxLength": 32,
+      "type": "string",
+    },
+    "invoice_total": {
+      "exclusiveMinimum": 0,
+      "type": "number",
+    },
+    "reasoning": {
+      "default": "",
+      "maxLength": 400,
+      "type": "string",
+    },
+    "salla_order_id": {
+      "maxLength": 64,
+      "type": "string",
+    },
+    "subject": {
+      "maxLength": 200,
+      "type": "string",
+    },
+    "task_description": {
+      "maxLength": 1000,
+      "type": "string",
+    },
+    "task_due_in_hours": {
+      "maximum": 720,
+      "minimum": 1,
+      "type": "integer",
+    },
+    "task_priority": {
+      "enum": [
+        "low",
+        "normal",
+        "high",
+        "urgent",
+      ],
+      "type": "string",
+    },
+    "task_title": {
+      "maxLength": 200,
+      "type": "string",
+    },
+    "to": {
+      "maxLength": 200,
+      "type": "string",
+    },
+    "tool": {
+      "default": "none",
+      "enum": [
+        "none",
+        "create_task",
+        "send_message",
+        "schedule_followup",
+        "create_calendar_event",
+        "lookup_salla_order",
+        "create_invoice",
+        "escalate_to_human",
+      ],
+      "type": "string",
+    },
+    "use_tool": {
+      "type": "boolean",
+    },
+  },
+  "required": [
+    "use_tool",
+  ],
+  "type": "object",
+}
+`;
+
+exports[`LLM structured-output schemas (wire format) > VisualBriefSchema matches its pinned JSON Schema 1`] = `
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+    "layout": {
+      "enum": [
+        "single",
+        "carousel",
+        "reel-cover",
+        "story",
+      ],
+      "type": "string",
+    },
+    "paletteCue": {
+      "description": "e.g., 'cream + emerald + warm sand'",
+      "type": "string",
+    },
+    "slides": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "headline": {
+            "type": "string",
+          },
+          "imageUrl": {
+            "format": "uri",
+            "type": "string",
+          },
+          "kind": {
+            "enum": [
+              "hero",
+              "feature",
+              "testimonial",
+              "cta",
+              "lifestyle",
+            ],
+            "type": "string",
+          },
+          "productId": {
+            "type": "string",
+          },
+          "subhead": {
+            "type": "string",
+          },
+        },
+        "required": [
+          "kind",
+          "headline",
+        ],
+        "type": "object",
+      },
+      "maxItems": 10,
+      "type": "array",
+    },
+  },
+  "required": [
+    "layout",
+    "slides",
+    "paletteCue",
+  ],
+  "type": "object",
+}
+`;

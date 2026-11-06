@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "description": "arabclue — your dalīl for trading in Arabia. Arabic-first AI ops copilot for Saudi & GCC SMBs.",
+  "engines": {
+    "node": ">=20.9.0"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",

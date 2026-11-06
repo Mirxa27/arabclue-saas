@@ -36,7 +36,7 @@ import { z } from "zod";
 // 1. PLANNER
 // ─────────────────────────────────────────────────────────────────────────────
 
-const PlannerOutputSchema = z.object({
+export const PlannerOutputSchema = z.object({
   posts: z.array(PlannedPostSchema).min(8).max(40)
 });
 
