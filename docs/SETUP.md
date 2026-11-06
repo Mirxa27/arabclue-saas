@@ -244,7 +244,10 @@ Configure these to point at `https://<your-domain>/api/salla/webhook`:
 - `app.installed`
 - `app.uninstalled` (clears the store's tokens; reinstalling reconnects the same merchant)
 - `order.created` (ZATCA invoice — the order is mapped from Salla's documented payload and must
-  reconcile with `amounts.total`; orders that don't are logged as `salla.order.unmapped`, not invoiced)
+  reconcile with `amounts.total`; orders that don't, or that carry 0% VAT lines (ZATCA needs an
+  exemption reason the payload doesn't have), are logged as `salla.order.unmapped`, not invoiced.
+  Orders that can't be invoiced *yet* — store not linked, subscription not active, ZATCA off or not
+  onboarded — wait in `pending_salla_orders` and are invoiced later; see §6)
 - `order.updated`
 
 Salla signs every payload with HMAC-SHA256 (`x-salla-signature`); the secret is `SALLA_WEBHOOK_SECRET`.
@@ -253,27 +256,56 @@ events log.
 
 ---
 
-## 6. ZATCA
+## 6. ZATCA (FATOORA Phase 2)
 
-### 6.1 Sandbox onboarding
+How it works and why: `data/research/zatca-phase2.md` (rules, sources, sandbox transcript).
 
-1. Get a developer account at [zatca.gov.sa](https://zatca.gov.sa/en/E-Invoicing).
-2. Generate an OTP from the Fatoora developer portal.
-3. The first time a merchant connects, the dashboard prompts for the OTP and the system:
-   - Generates a CSR (Certificate Signing Request) on the server.
-   - Submits to ZATCA `/compliance` to get a compliance CSID.
-   - Submits to ZATCA `/production/csids` to upgrade to a production CSID.
-   - Stores the production CSID encrypted against the merchant row.
-
-### 6.2 Production switch
-
-Once you're a registered VAT payer with a valid production CSID, set:
+### 6.1 Configure the environment
 
 ```env
-ZATCA_FATOORA_BASE=https://gw-fatoora.zatca.gov.sa
+ZATCA_ENVIRONMENT=sandbox        # sandbox (developer portal) | simulation | production
+# ZATCA_FATOORA_BASE=            # optional override of https://gw-fatoora.zatca.gov.sa/e-invoicing/{developer-portal|simulation|core}
+TOKEN_ENCRYPTION_KEY=…           # required: EGS private keys and CSIDs are stored encrypted only
+CRON_SECRET=…                    # required for GET /api/zatca/sweep (resends, waiting orders)
 ```
 
-(Sandbox base is `https://gw-fatoora.zatca.gov.sa/e-invoicing/developer-portal`.)
+With neither ZATCA variable set, e-invoicing is off: onboarding answers 503 and Salla orders wait in
+`pending_salla_orders`. There is **no platform-wide CSID** — `ZATCA_CSID` / `ZATCA_PRIVATE_KEY_PEM`
+are no longer read.
+
+### 6.2 Merchant onboarding (Settings → ZATCA e-invoicing onboarding)
+
+Requires an active (or past-due grace) subscription on a plan with ZATCA, `features.zatca` on, and a
+complete tax profile (seller name, VAT number 3…3, street, 4-digit building number, district, city,
+5-digit postal code).
+
+1. The merchant generates an OTP in the FATOORA portal (sandbox: ZATCA's documented OTP `123345`).
+2. The server generates a secp256k1 key and a CSR (template `TSTZATCA-` / `PREZATCA-` / `ZATCA-Code-Signing`
+   per environment) and requests the **compliance CSID** (`POST /compliance`).
+3. It signs and submits the six **compliance checks** (standard + simplified × invoice / credit note /
+   debit note) to `POST /compliance/invoices`.
+4. It requests the **production CSID** (`POST /production/csids`). The key and both CSIDs are stored
+   encrypted in `zatca_egs_units` (service role only); the browser only sees step, check results and
+   certificate expiry. A failed step is resumed without a new OTP.
+
+Sandbox caveat: the developer portal's production CSID is ZATCA's fixed test certificate for VAT
+`399999999900003` — reporting/clearance in the sandbox only accepts that VAT number.
+
+### 6.3 Invoicing
+
+- Each Salla `order.created` → a signed **simplified** invoice (Salla orders have no buyer VAT number),
+  reported to ZATCA. Standard (B2B) documents are cleared; ZATCA's stamped XML is stored as the legal
+  document (`invoices.cleared_xml`).
+- ICV + previous-invoice hash are allocated atomically per merchant (`zatca_append_invoice`); a Salla
+  order has at most one live invoice (redeliveries are idempotent).
+- Rejected → shown with ZATCA's errors; **Reissue** creates a corrected new document (new ICV/UUID,
+  number `…-R1`). Not delivered (timeouts, 5xx) → **Resubmit** resends the same document; the sweep
+  cron does it automatically every 10 minutes.
+
+### 6.4 Going live
+
+Move from `sandbox` → `simulation` (FATOORA simulation portal OTPs) → `production`. Merchants onboard
+again after each switch (the EGS unit is per environment; the PIH chain restarts, ICVs keep counting).
 
 ---
 
@@ -417,6 +449,6 @@ See [DEPLOYMENT.md](./DEPLOYMENT.md).
 
 **Salla OAuth returns "redirect_uri_mismatch".** The URI in the Salla app config must match the value in `SALLA_REDIRECT_URI` *exactly*, including protocol and trailing slash.
 
-**ZATCA compliance returns 400.** Most common cause: CSR subject DN doesn't match ZATCA's exact field order. The CSR builder in `lib/zatca/signing.ts` follows the official template — verify your VAT number is 15 digits and your `commonName` matches the registered name.
+**ZATCA onboarding fails.** The Settings card shows ZATCA's own message. `Invalid-OTP`: OTPs are single-use and expire after an hour — generate a new one. A failed compliance check lists ZATCA's rule codes (e.g. `BR-KSA-37` building number) — fix the tax details and press *Resume* (no new OTP needed). `certificate-permissions` in the sandbox: use VAT `399999999900003` (§6.2). The CSR is built by `lib/zatca/csr.ts` (structure identical to ZATCA's OpenSSL template, checked by `openssl req -verify` in the tests).
 
 **Social posts schedule but never publish.** Check Vercel Cron logs — the cron secret must match `CRON_SECRET` in env.

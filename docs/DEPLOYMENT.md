@@ -65,6 +65,7 @@ Vercel Cron is **not** used on Hostinger. Use hPanel **Advanced → Cron Jobs** 
 |-----|----------|----------|
 | Social scheduler | `*/15 * * * *` | `GET /api/cron/social-scheduler` |
 | AI employees tick | `*/5 * * * *` | `GET /api/cron/employees-tick` |
+| ZATCA sweep | `*/10 * * * *` | `GET /api/zatca/sweep` (resends undelivered invoices, invoices waiting Salla orders; 503 while `CRON_SECRET` is unset) |
 
 **Auth:** `Authorization: Bearer YOUR_CRON_SECRET` (or `x-cron-secret` / `?secret=`).
 
@@ -263,12 +264,26 @@ If you used a free-tier project for development, upgrade to **Pro** before hitti
 
 ---
 
-## 5. ZATCA production CSID
+## 5. ZATCA (FATOORA Phase 2)
 
-Each merchant onboards through the dashboard:
-1. Merchant visits **Settings → ZATCA** → enters their OTP from the Fatoora portal.
-2. Server generates CSR, submits to ZATCA, exchanges for a production CSID.
-3. CSID stored encrypted, key never leaves the server.
+Set `ZATCA_ENVIRONMENT` (`sandbox` → `simulation` → `production`; Admin → Config or hPanel) and keep
+`TOKEN_ENCRYPTION_KEY` / `CRON_SECRET` set. Apply migrations `20261106003500_zatca_phase2.sql` and
+`20261106003600_pending_salla_orders.sql` (both re-runnable).
+
+Each merchant onboards through **Settings → ZATCA e-invoicing onboarding** with an OTP from the
+FATOORA portal: the server generates the EGS key + CSR, gets the compliance CSID, passes the six
+compliance checks and gets the production CSID. Key and CSIDs are stored encrypted per merchant
+(`zatca_egs_units`, service role only); there is no platform-wide CSID (`ZATCA_CSID` is ignored).
+
+- **Before deploying the migration** run the critic-24 pre-flight on production:
+  `select merchant_id, salla_order_id, count(*) from invoices where salla_order_id is not null group by 1,2 having count(*) > 1;`
+  The migration never aborts on duplicates: it keeps the earliest invoice, marks later unreported
+  ones `failed` (note: no action needed) and leaves reported ones as they are with a note and a
+  migration WARNING — **issue a credit note for each of those**.
+- Merchants whose old `zatca_onboarded_at` had no signing key (the previous flow) are reset and must
+  onboard again; old (pre-Phase-2) invoices stay readable but cannot be resubmitted.
+- After switching environments merchants onboard again; documents of other environments are labelled
+  as test documents in the dashboard.
 
 For your *own* (operator) merchant identity — required if you bill via your own VAT registration — onboard once via the same flow.
 
@@ -301,7 +316,7 @@ For your *own* (operator) merchant identity — required if you bill via your ow
 
 - Supabase PITR covers DB.
 - Code: GitHub `main` is source of truth; tag releases.
-- ZATCA invoice XMLs: store a duplicate in an S3 bucket (R2/Cloudflare or AWS me-south-1) on every submission — ZATCA mandates 6-year archival.
+- ZATCA invoice XMLs: the signed XML (and ZATCA's cleared XML for standard invoices) is stored in `invoices`; also keep a copy in an S3 bucket (R2/Cloudflare or AWS me-south-1) — ZATCA mandates 6-year archival. The EGS private keys are only useful with `TOKEN_ENCRYPTION_KEY`: back both up, separately.
 
 ---
 

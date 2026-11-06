@@ -227,22 +227,15 @@ describe("order.created (docs.salla.dev/doc-433804)", () => {
     };
   });
 
-  it("invoices the documented order for exactly data.amounts.total", async () => {
+  // Issuing, ICV/PIH chaining, reporting and the SW-2 gates are covered end to end in
+  // __tests__/zatca/order-invoicing.test.ts; this file pins what the webhook route does with them.
+  it("records the documented order (0% VAT, no exemption reason in the payload) instead of issuing a document ZATCA rejects", async () => {
     expect((await POST(signed(orderCreatedEvent))).status).toBe(200);
-    const [insert] = writes("invoices", "insert");
-    expect(insert.payload).toMatchObject({
-      merchant_id: MERCHANT_ID,
-      salla_order_id: String(orderCreatedEvent.data.id),
-      subtotal: 196,
-      vat: 0,
-      total: orderCreatedEvent.data.amounts.total.amount
-    });
-    const xml = String((insert.payload as { xml: string }).xml);
-    expect(xml).toContain("<cbc:IssueDate>2022-06-26</cbc:IssueDate>");
-    expect(xml).toContain("<cbc:IssueTime>09:21:45</cbc:IssueTime>"); // 12:21:45 Asia/Riyadh (generator prints UTC)
-    expect(xml).toContain('<cbc:PriceAmount currencyID="SAR">181.00</cbc:PriceAmount>');
-    expect(xml).toContain("<cbc:RegistrationName>Mohammed Ali</cbc:RegistrationName>");
-    expect(eventRows()).toHaveLength(0);
+    expect(writes("invoices")).toHaveLength(0);
+    expect(service.rpcCalls.find((c) => c.fn === "zatca_append_invoice")).toBeUndefined();
+    const [row] = eventRows();
+    expect(row).toMatchObject({ kind: "salla.order.unmapped", merchant: MERCHANT_ID });
+    expect(row.payload).toMatchObject({ reason: "unsupported_vat_rate", order_id: String(orderCreatedEvent.data.id) });
   });
 
   it("records an order whose totals do not reconcile instead of invoicing it", async () => {
@@ -263,10 +256,38 @@ describe("order.created (docs.salla.dev/doc-433804)", () => {
     expect(eventRows()[0].payload).toMatchObject({ reason: "invalid_payload", order_id: "5" });
   });
 
-  it("ignores orders of stores that are not linked to a merchant", async () => {
+  it("RB-S3: records orders of a store that is not linked to a merchant (yet) instead of dropping them", async () => {
     state.merchant = null;
-    expect((await POST(signed(orderCreatedEvent))).status).toBe(200);
+    const order15 = structuredClone(orderCreatedEvent);
+    order15.data.amounts.tax = { percent: "15.00", amount: { amount: 29.4, currency: "SAR" } };
+    order15.data.amounts.total.amount = 225.4;
+    for (const item of order15.data.items as Array<{ amounts: Record<string, unknown> }>) {
+      item.amounts.tax = { percent: "15.00", amount: { amount: 0, currency: "SAR" } };
+    }
+    expect((await POST(signed(order15))).status).toBe(200);
     expect(writes("invoices")).toHaveLength(0);
-    expect(eventRows()).toHaveLength(0);
+    const [pending] = writes("pending_salla_orders", "upsert");
+    expect(pending.payload).toMatchObject({
+      salla_store_id: String(orderCreatedEvent.merchant),
+      salla_order_id: String(orderCreatedEvent.data.id),
+      merchant_id: null,
+      reason: "store_unlinked",
+      status: "pending",
+      order_total: 225.4
+    });
+    // stored minimised: no customer e-mail or phone
+    expect(JSON.stringify((pending.payload as { order_payload: unknown }).order_payload)).not.toMatch(/usertest@gmail.com|mobile/);
+    expect(eventRows().map((e) => e.kind)).toEqual(["salla.order.pending"]);
+  });
+
+  it("RB-S3: a database error looking up the store's merchant fails the delivery (5xx, claim released) instead of a silent 200", async () => {
+    service = createFakeSupabase(
+      "service",
+      (call) => (call.table === "merchants" ? { error: { code: "57014", message: "statement timeout" } } : handler(call)),
+      (fn) => (fn === "claim_webhook_event" ? { data: "new" } : { data: null })
+    );
+    expect((await POST(signed(orderCreatedEvent))).status).toBe(500);
+    const release = writes("webhook_events", "update").find((c) => (c.payload as { status?: string }).status === "failed");
+    expect(release).toBeDefined();
   });
 });

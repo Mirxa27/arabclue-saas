@@ -1,64 +1,50 @@
+/**
+ *   GET   the merchant's invoice (RLS: owner only; never gated — it is the merchant's legal record)
+ *   POST  "Resubmit to ZATCA": resend a document that got no verdict, or reissue a rejected one as a
+ *         corrected new document (lib/invoices/resubmit.ts). Gated like issuing (SW-2): 402 without
+ *         an active subscription, 503 disabled / not configured, 409 "onboard first". There is no
+ *         platform-wide credential: only the merchant's own EGS unit signs and submits (F14).
+ */
 import { NextRequest, NextResponse } from "next/server";
-import { requireUserApi, getCurrentMerchant } from "@/lib/auth/session";
+import { z } from "zod";
+import { requireMerchantApi } from "@/lib/auth/session";
 import { getServerSupabase, getServiceSupabase } from "@/lib/db/supabase";
-import { handleRouteError } from "@/lib/api/route-handler";
-import { getMerchantZatcaCsid } from "@/lib/merchant/secrets";
-import { submitToFatoora } from "@/lib/zatca/fatoora";
+import { notFound } from "@/lib/api/errors";
+import { enforceRateLimit } from "@/lib/security/rate-limit";
+import { zatcaRouteError } from "@/lib/zatca/route-errors";
+import { resubmitInvoice } from "@/lib/invoices/resubmit";
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+export const maxDuration = 60;
+
+const IdSchema = z.string().uuid();
 
 export async function GET(_req: NextRequest, props: { params: Promise<{ id: string }> }) {
-  const params = await props.params;
-  await requireUserApi();
-  const merchant = await getCurrentMerchant();
-  if (!merchant) return NextResponse.json({ error: "no merchant" }, { status: 400 });
-  const supabase = await getServerSupabase();
-  const { data, error } = await supabase
-    .from("invoices")
-    .select("*")
-    .eq("id", params.id)
-    .eq("merchant_id", merchant.id)
-    .single();
-  if (error) return NextResponse.json({ error: error.message }, { status: 404 });
-  return NextResponse.json(data);
+  try {
+    const merchant = await requireMerchantApi();
+    const { id } = await props.params;
+    if (!IdSchema.safeParse(id).success) throw notFound("Invoice");
+    const supabase = await getServerSupabase();
+    const { data, error } = await supabase.from("invoices").select("*").eq("id", id).eq("merchant_id", merchant.id).maybeSingle();
+    if (error) throw new Error(`invoice lookup failed: ${error.message}`);
+    if (!data) throw notFound("Invoice");
+    return NextResponse.json(data);
+  } catch (err) {
+    return zatcaRouteError(err, "GET /api/zatca/invoice/[id]");
+  }
 }
 
-export async function POST(_req: NextRequest, props: { params: Promise<{ id: string }> }) {
+export async function POST(req: NextRequest, props: { params: Promise<{ id: string }> }) {
   try {
-    const params = await props.params;
-    await requireUserApi();
-    const merchant = await getCurrentMerchant();
-    if (!merchant) return NextResponse.json({ error: "no merchant" }, { status: 400 });
-    const supabase = await getServerSupabase();
-    const { data: invoice, error } = await supabase
-      .from("invoices")
-      .select("*")
-      .eq("id", params.id)
-      .eq("merchant_id", merchant.id)
-      .single();
-    if (error || !invoice) return NextResponse.json({ error: "not found" }, { status: 404 });
-
-    // The CSID is a credential the session cannot read (RA-9): service role, this merchant's row.
-    const csid = (await getMerchantZatcaCsid(merchant.id)) ?? process.env.ZATCA_CSID;
-
-    const result = await submitToFatoora({
-      xml: invoice.xml,
-      uuid: invoice.uuid,
-      invoiceHash: invoice.invoice_hash,
-      csid,
-      base: process.env.ZATCA_FATOORA_BASE
-    });
-
-    // invoices are not writable through the Data API; ownership was checked by the read above.
-    const { error: updateErr } = await getServiceSupabase()
-      .from("invoices")
-      .update({ status: result.cleared ? "cleared" : "rejected", fatoora_response: result.raw })
-      .eq("id", params.id)
-      .eq("merchant_id", merchant.id);
-    if (updateErr) {
-      return NextResponse.json({ error: "Could not record the Fatoora result" }, { status: 500 });
-    }
-
+    const merchant = await requireMerchantApi();
+    const { id } = await props.params;
+    if (!IdSchema.safeParse(id).success) throw notFound("Invoice");
+    const limited = await enforceRateLimit(req, "zatca:resubmit", 30, 10 * 60_000, merchant.id);
+    if (limited instanceof NextResponse) return limited;
+    const result = await resubmitInvoice(getServiceSupabase(), merchant, id);
     return NextResponse.json(result);
   } catch (err) {
-    return handleRouteError(err, { route: "POST /api/zatca/invoice/[id]" });
+    return zatcaRouteError(err, "POST /api/zatca/invoice/[id]");
   }
 }
