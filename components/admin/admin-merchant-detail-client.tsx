@@ -24,7 +24,7 @@ type MerchantDetail = {
   voicePhone: string | null;
   counts: { invoices: number; socialPosts: number };
   recentEvents: { id: string; kind: string; payload: Record<string, unknown> | null; created_at: string }[];
-  billingPayments: { id: string; amount_sar: number | null; status: string | null; created_at: string }[];
+  billingPayments: { id: string; amount_halalas: number | null; status: string | null; created_at: string }[];
 };
 
 export function AdminMerchantDetailClient({ merchantId }: { merchantId: string }) {
@@ -128,7 +128,7 @@ export function AdminMerchantDetailClient({ merchantId }: { merchantId: string }
           <ul className="divide-y divide-rule text-sm">
             {merchant.billingPayments.map((p) => (
               <li key={p.id} className="py-3 flex justify-between gap-4">
-                <span>{p.amount_sar != null ? `${p.amount_sar} SAR` : "—"}</span>
+                <span>{p.amount_halalas != null ? `${(p.amount_halalas / 100).toFixed(2)} SAR` : "—"}</span>
                 <span className="text-ink-mute">{p.status ?? "—"} · {new Date(p.created_at).toLocaleDateString()}</span>
               </li>
             ))}

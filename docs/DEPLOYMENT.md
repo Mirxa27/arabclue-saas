@@ -99,7 +99,7 @@ bash scripts/hostinger-post-deploy.sh
 | AI employee Slack (per hire) | `https://arabclue.com/api/employees/webhooks/slack/{employeeId}` |
 | Twilio voice | `https://arabclue.com/api/voice/twilio/inbound` |
 
-**Health check:** `GET https://arabclue.com/api/health` — Supabase, Moyasar, OpenAI reachability + git SHA.
+**Health check:** `GET https://arabclue.com/api/health` — public liveness + database reachability (`{ ok, timestamp }`, cached 30 s, rate-limited). Operators get the detailed report (Supabase, Moyasar, OpenAI reachability + git SHA) with `Authorization: Bearer $CRON_SECRET` (or `x-cron-secret`) or a platform-admin session.
 
 **Migrations:** run `npm run db:push` (includes `0007_webhook_idempotency.sql` for webhook dedupe + `voice_configs.twilio_incoming_sid`).
 

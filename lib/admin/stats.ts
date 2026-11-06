@@ -101,33 +101,30 @@ export type EventsAdminFilters = {
   offset?: number;
 };
 
+type AdminEventRow = { id: number; kind: string; merchant: string | null; payload: unknown; created_at: string; total_count: number };
+
+/**
+ * Admin event search. Uses the admin_search_events SQL function: PostgREST cannot
+ * cast payload::text in a filter, and the function matches the term literally.
+ */
 export async function listEventsAdminFiltered(filters: EventsAdminFilters = {}) {
   const supabase = getServiceSupabase();
-  const limit = Math.min(Math.max(filters.limit ?? 40, 1), 100);
-  const offset = Math.max(filters.offset ?? 0, 0);
+  const limit = Math.min(Math.max(Math.trunc(filters.limit ?? 40) || 40, 1), 100);
+  const offset = Math.max(Math.trunc(filters.offset ?? 0) || 0, 0);
 
-  let query = supabase
-    .from("events")
-    .select("id, kind, merchant, payload, created_at", { count: "exact" })
-    .order("created_at", { ascending: false })
-    .range(offset, offset + limit - 1);
-
-  if (filters.kind?.trim()) {
-    query = query.eq("kind", filters.kind.trim());
-  }
-  if (filters.merchant?.trim()) {
-    query = query.eq("merchant", filters.merchant.trim());
-  }
-  if (filters.search?.trim()) {
-    query = query.or(`kind.ilike.%${filters.search.trim()}%,payload::text.ilike.%${filters.search.trim()}%`);
-  }
-
-  const { data, error, count } = await query;
+  const { data, error } = await supabase.rpc("admin_search_events", {
+    p_search: filters.search?.trim() || null,
+    p_kind: filters.kind?.trim() || null,
+    p_merchant: filters.merchant?.trim() || null,
+    p_limit: limit,
+    p_offset: offset
+  });
   if (error) throw new Error(error.message);
 
+  const rows = (data ?? []) as AdminEventRow[];
   return {
-    events: data ?? [],
-    total: count ?? 0,
+    events: rows.map(({ total_count: _total, ...event }) => event),
+    total: rows.length ? Number(rows[0].total_count) : offset,
     limit,
     offset
   };
@@ -164,7 +161,7 @@ export async function getMerchantAdminDetail(merchantId: string) {
       .eq("merchant", merchantId)
       .order("created_at", { ascending: false })
       .limit(20),
-    supabase.from("billing_payments").select("id, amount_sar, status, created_at").eq("merchant_id", merchantId).order("created_at", { ascending: false }).limit(5)
+    supabase.from("billing_payments").select("id, amount_halalas, status, created_at").eq("merchant_id", merchantId).order("created_at", { ascending: false }).limit(5)
   ]);
 
   return {

@@ -15,6 +15,7 @@ import { z } from "zod";
 import { requireUserApi } from "@/lib/auth/session";
 import { handleRouteError } from "@/lib/api/route-handler";
 import { aiText } from "@/lib/ai/providers";
+import { enforceRateLimit } from "@/lib/security/rate-limit";
 import {
   buildOnboardingSystemPrompt,
   type OnboardingChatMessage,
@@ -34,12 +35,12 @@ const OnboardingChatBody = z.object({
   /** Merchant context so far (businessName, plan, etc.) */
   context: z
     .object({
-      businessName: z.string().optional(),
-      vatNumber: z.string().optional(),
-      essence: z.string().optional(),
-      attributes: z.string().optional(),
-      dialect: z.string().optional(),
-      plan: z.string().optional(),
+      businessName: z.string().max(200).optional(),
+      vatNumber: z.string().max(20).optional(),
+      essence: z.string().max(2000).optional(),
+      attributes: z.string().max(1000).optional(),
+      dialect: z.string().max(40).optional(),
+      plan: z.string().max(40).optional(),
       dpaAccepted: z.boolean().optional(),
     })
     .optional()
@@ -65,6 +66,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   try {
     // Auth gate — must be logged in
     const user = await requireUserApi();
+
+    // Every call is an LLM request: 20 per minute per signed-in user.
+    const limited = await enforceRateLimit(req, "assistant:onboarding", 20, 60_000, user.id);
+    if (limited instanceof NextResponse) return limited;
 
     // Parse and validate request body
     const body = OnboardingChatBody.parse(await req.json());

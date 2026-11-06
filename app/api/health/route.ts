@@ -1,88 +1,41 @@
-import { NextResponse } from "next/server";
-import { hydratePlatformEnvFromDatabase } from "@/lib/platform/env";
-import { getServiceSupabase } from "@/lib/db/supabase";
+import { NextResponse, type NextRequest } from "next/server";
+import { detailedHealth, publicHealth } from "@/lib/health/checks";
+import { hasBearerSecret, safeEqual } from "@/lib/security/compare";
+import { isPlatformAdmin } from "@/lib/auth/admin";
+import { enforceRateLimit } from "@/lib/security/rate-limit";
 import { reportError } from "@/lib/observability/error-reporter";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-type CheckResult = { ok: boolean; latencyMs?: number; message?: string };
-
-async function timedCheck(fn: () => Promise<void>): Promise<CheckResult> {
-  const start = Date.now();
-  try {
-    await fn();
-    return { ok: true, latencyMs: Date.now() - start };
-  } catch (err) {
-    return {
-      ok: false,
-      latencyMs: Date.now() - start,
-      message: err instanceof Error ? err.message : "check failed"
-    };
+/** Operators (cron secret or platform-admin session) get the detailed report; never when the secret is unset. */
+async function isOperator(req: NextRequest): Promise<boolean> {
+  const secret = process.env.CRON_SECRET?.trim();
+  if (secret) {
+    if (hasBearerSecret(req, secret)) return true;
+    const header = req.headers.get("x-cron-secret")?.trim();
+    if (header && safeEqual(header, secret)) return true;
   }
+  return isPlatformAdmin().catch(() => false);
 }
 
-async function checkSupabase(): Promise<CheckResult> {
-  return timedCheck(async () => {
-    const supabase = getServiceSupabase();
-    const { error } = await supabase.from("merchants").select("id").limit(1);
-    if (error) throw new Error(error.message);
-  });
-}
-
-async function checkMoyasar(): Promise<CheckResult> {
-  const key = process.env.MOYASAR_SECRET_KEY;
-  if (!key) return { ok: false, message: "MOYASAR_SECRET_KEY not configured" };
-  return timedCheck(async () => {
-    const res = await fetch("https://api.moyasar.com/v1/payments?limit=1", {
-      headers: { authorization: `Basic ${Buffer.from(`${key}:`).toString("base64")}` },
-      signal: AbortSignal.timeout(8000)
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  });
-}
-
-async function checkOpenAI(): Promise<CheckResult> {
-  const key = process.env.OPENAI_API_KEY;
-  if (!key) return { ok: false, message: "OPENAI_API_KEY not configured" };
-  return timedCheck(async () => {
-    const res = await fetch("https://api.openai.com/v1/models", {
-      headers: { authorization: `Bearer ${key}` },
-      signal: AbortSignal.timeout(8000)
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  });
-}
-
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
-    await hydratePlatformEnvFromDatabase();
-    const [supabase, moyasar, openai] = await Promise.all([
-      checkSupabase(),
-      checkMoyasar(),
-      checkOpenAI()
-    ]);
+    if (await isOperator(req)) {
+      const report = await detailedHealth();
+      return NextResponse.json(report, { status: report.ok ? 200 : 503, headers: { "cache-control": "no-store" } });
+    }
 
-    const checks = { supabase, moyasar, openai };
-    const ok = Object.values(checks).every((c) => c.ok);
-    const gitSha =
-      process.env.VERCEL_GIT_COMMIT_SHA ??
-      process.env.GIT_SHA ??
-      process.env.COMMIT_SHA ??
-      "dev";
+    const limited = await enforceRateLimit(req, "health", 60, 60_000);
+    if (limited instanceof NextResponse) return limited;
 
-    return NextResponse.json(
-      {
-        ok,
-        version: process.env.npm_package_version ?? "0.1.0",
-        gitSha,
-        timestamp: new Date().toISOString(),
-        checks
-      },
-      { status: ok ? 200 : 503 }
-    );
+    const health = await publicHealth();
+    return NextResponse.json(health, {
+      status: health.ok ? 200 : 503,
+      headers: { "cache-control": "public, max-age=30" }
+    });
   } catch (err) {
     reportError(err, { route: "/api/health" });
-    return NextResponse.json({ ok: false, error: "health check failed" }, { status: 500 });
+    return NextResponse.json({ ok: false }, { status: 500 });
   }
 }

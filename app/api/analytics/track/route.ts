@@ -1,16 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { z } from "zod";
 import { trackServerEvent, shouldTrackAnalytics } from "@/lib/analytics/track";
+import { AnalyticsBodySchema, ANALYTICS_MAX_BODY_BYTES } from "@/lib/analytics/schema";
 import { enforceRateLimit } from "@/lib/security/rate-limit";
 import { handleRouteError } from "@/lib/api/route-handler";
+import { HttpError } from "@/lib/api/errors";
+import { readTextBody } from "@/lib/http/raw-body";
 
 export const runtime = "nodejs";
-
-const BodySchema = z.object({
-  name: z.string().min(1).max(80).regex(/^[a-z0-9._-]+$/i),
-  props: z.record(z.string(), z.unknown()).optional(),
-  sessionId: z.string().max(64).optional()
-});
 
 export async function POST(req: NextRequest) {
   try {
@@ -22,15 +18,15 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true, skipped: "dnt" });
     }
 
-    const body = BodySchema.parse(await req.json());
-    await trackServerEvent(
-      {
-        name: body.name,
-        props: body.props,
-        sessionId: body.sessionId ?? null
-      },
-      dnt
-    );
+    const raw = await readTextBody(req, ANALYTICS_MAX_BODY_BYTES);
+    let json: unknown;
+    try {
+      json = JSON.parse(raw);
+    } catch {
+      throw new HttpError(400, "Body must be JSON", "invalid_json");
+    }
+    const body = AnalyticsBodySchema.parse(json);
+    await trackServerEvent({ name: body.name, props: body.props, sessionId: body.sessionId ?? null }, dnt);
 
     return NextResponse.json({ ok: true });
   } catch (err) {
