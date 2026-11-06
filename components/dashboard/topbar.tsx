@@ -7,13 +7,15 @@ import { cn } from "@/lib/utils";
 import { useMerchant } from "@/hooks/use-merchant";
 import {
   Search,
-  Bell,
   CalendarDays,
   ChevronDown,
   LogOut,
   Settings,
   Sparkles,
+  User,
 } from "lucide-react";
+import { NotificationsBell } from "@/components/dashboard/notifications-bell";
+import { merchantDisplayName } from "@/lib/merchant/display-name";
 import type { Merchant } from "@/lib/types/database";
 
 function useCurrentTime() {
@@ -44,8 +46,8 @@ function Greeting({ merchantName }: { merchantName: string }) {
 
   return (
     <div className="flex-1 min-w-0">
-      <h1 className="text-base sm:text-lg font-sans font-semibold text-ink leading-tight tracking-tight truncate">
-        {greeting}، {merchantName || "المستخدم"}
+      <h1 className="text-base sm:text-lg font-sans font-semibold text-ink leading-tight tracking-tight truncate" dir="auto">
+        {merchantName ? `${greeting}، ${merchantName}` : greeting}
       </h1>
       <p className="text-[11px] sm:text-xs text-ink-mute font-sans mt-0.5 tracking-wide">
         {formatted}
@@ -61,7 +63,7 @@ export function Topbar({
   merchant?: Merchant | null;
   title?: ReactNode;
 }) {
-  const { merchant: hookMerchant, loading } = useMerchant();
+  const { merchant: hookMerchant, email } = useMerchant();
   const merchant = propMerchant ?? hookMerchant;
   const [isScrolled, setIsScrolled] = useState(false);
   const [isProfileOpen, setIsProfileOpen] = useState(false);
@@ -106,7 +108,9 @@ export function Topbar({
     return () => document.removeEventListener("keydown", handleEscape);
   }, []);
 
-  const merchantName = merchant?.store_name ?? merchant?.name ?? "";
+  // UI-017: real columns only — the seller name, the Salla store name, else the store's host.
+  const merchantName = merchantDisplayName(merchant);
+  const avatarInitial = Array.from(merchantName || email || "")[0]?.toUpperCase() ?? "";
 
   return (
     <header className="sticky top-0 z-30 w-full px-3 sm:px-5 lg:px-8 pt-3">
@@ -148,14 +152,7 @@ export function Topbar({
           </button>
 
           {/* Notifications */}
-          <button
-            type="button"
-            className="relative flex items-center justify-center w-10 h-10 rounded-xl text-ink-mute hover:text-accent hover:bg-accent/5 border border-transparent hover:border-accent/10 transition-[background-color,border-color,color,transform] duration-300 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 touch-target"
-            aria-label="Notifications"
-          >
-            <Bell size={18} strokeWidth={2} />
-            <span className="absolute top-2 right-2 w-[7px] h-[7px] bg-accent-warm rounded-full border border-paper" />
-          </button>
+          <NotificationsBell />
 
           {/* Date Trigger */}
           <Link
@@ -181,10 +178,10 @@ export function Topbar({
               aria-label="Profile menu"
             >
               <div className="w-6 h-6 rounded-full bg-gradient-to-br from-accent to-accent-warm flex items-center justify-center text-paper text-[10px] font-bold font-mono ring-2 ring-paper">
-                {merchantName ? merchantName[0].toUpperCase() : "A"}
+                {avatarInitial || <User size={12} strokeWidth={2.5} aria-hidden="true" />}
               </div>
-              <span className="text-[13px] font-sans font-semibold max-w-[100px] truncate hidden sm:inline">
-                {merchantName || "Account"}
+              <span className="text-[13px] font-sans font-semibold max-w-[100px] truncate hidden sm:inline" dir="auto">
+                {merchantName || "حسابي · Account"}
               </span>
               <ChevronDown
                 size={14}
@@ -200,12 +197,14 @@ export function Topbar({
             {isProfileOpen && (
               <div className="absolute right-0 top-full mt-2 w-56 bg-paper/95 backdrop-blur-2xl border border-rule/50 rounded-2xl shadow-glass-xl p-2 z-50 animate-scale-in origin-top-right">
                 <div className="px-3 py-2.5 border-b border-rule/30 mb-1">
-                  <p className="text-sm font-sans font-semibold text-ink truncate">
-                    {merchantName || "Account"}
+                  <p className="text-sm font-sans font-semibold text-ink truncate" dir="auto">
+                    {merchantName || "حسابي · Account"}
                   </p>
-                  <p className="text-[11px] text-ink-mute font-mono mt-0.5 truncate">
-                    {merchant?.email ?? "email@example.com"}
-                  </p>
+                  {email && (
+                    <p className="text-[11px] text-ink-mute font-mono mt-0.5 truncate" dir="ltr">
+                      {email}
+                    </p>
+                  )}
                 </div>
 
                 <Link

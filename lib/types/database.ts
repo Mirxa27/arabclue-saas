@@ -25,9 +25,6 @@ export type Merchant = {
   salla_merchant_id: string | null;
   salla_store_name?: string | null;
   store_url: string | null;
-  store_name?: string | null;
-  name?: string | null;
-  email?: string | null;
   seller_name: string | null;
   vat_number: string | null;
   cr_number: string | null;

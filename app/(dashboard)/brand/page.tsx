@@ -145,21 +145,32 @@ export default function BrandPage() {
     }
   }
 
+  // UI-009: the real generator (POST /api/brand-kit/generate — signed-in, rate-limited, AI-backed).
+  // The essence gives it context and the selected dialect is kept; nothing is saved until "Save".
   async function generateVoice() {
+    const brandName = kit.brand_name.trim();
+    if (!brandName) return;
     setGenerating(true);
     try {
-      const json = await apiFetch<{ kit?: BrandKit }>("/api/brand-kit/generate", {
+      const essence = (kit.essence ?? "").trim();
+      const json = await apiFetch<{ kit?: Partial<BrandKit> }>("/api/brand-kit/generate", {
         method: "POST",
-        body: JSON.stringify({ brand_name: kit.brand_name }),
+        body: JSON.stringify({
+          brand_name: brandName.slice(0, MAX_BRAND_NAME),
+          ...(essence ? { description: essence.slice(0, MAX_BRAND_ESSENCE) } : {}),
+          dialect: kit.dialect,
+        }),
       });
-      if (json?.kit) {
-        const generated: BrandKit = { ...kit, ...json.kit };
-        setKit(generated);
-        setLists(listText(generated));
-        toast("Voice profile generated from brand name", "success");
+      if (!json?.kit) {
+        toast("لم يُرجع المولّد أي اقتراح · The generator returned no suggestion", "error");
+        return;
       }
+      const generated: BrandKit = { ...kit, ...json.kit, brand_name: kit.brand_name };
+      setKit(generated);
+      setLists(listText(generated));
+      toast("تم اقتراح صوت العلامة — راجعه ثم احفظ · Brand voice suggested — review it, then save", "success");
     } catch (err) {
-      toast(err instanceof ApiClientError ? err.message : "Generation failed", "error");
+      toast(err instanceof ApiClientError ? err.message : "تعذّر التوليد · Generation failed", "error");
     } finally {
       setGenerating(false);
     }

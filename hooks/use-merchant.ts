@@ -7,6 +7,8 @@ import type { Merchant } from "@/lib/types/database";
 
 type UseMerchantResult = {
   merchant: Merchant | null;
+  /** The signed-in user's email (the auth user — merchants has no email column). */
+  email: string | null;
   loading: boolean;
   error: string | null;
   reload: () => Promise<void>;
@@ -14,6 +16,7 @@ type UseMerchantResult = {
 
 export function useMerchant(): UseMerchantResult {
   const [merchant, setMerchant] = useState<Merchant | null>(null);
+  const [email, setEmail] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -24,6 +27,7 @@ export function useMerchant(): UseMerchantResult {
       const sb = getBrowserSupabase();
       const { data: { user }, error: authErr } = await sb.auth.getUser();
       if (authErr) throw authErr;
+      setEmail(user?.email ?? null);
       if (!user) {
         setMerchant(null);
         return;
@@ -50,5 +54,5 @@ export function useMerchant(): UseMerchantResult {
     void reload();
   }, [reload]);
 
-  return { merchant, loading, error, reload };
+  return { merchant, email, loading, error, reload };
 }

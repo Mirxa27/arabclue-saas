@@ -204,7 +204,7 @@ const EmptyState = memo(function EmptyState() {
         لا يوجد موظفين افتراضيين بعد
       </h3>
       <p className="max-w-xs text-center font-arabic text-[13px] text-ink/45">
-        شغّل مساعديك الافتراضيين من صفحة الإعدادات وابدأ بأتمتة أعمالك
+        شغّل مساعديك من هذه البطاقات أو وظّف موظفين أذكياء من السوق · Switch agents on here, or hire AI employees in the Marketplace
       </p>
     </div>
   );

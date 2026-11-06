@@ -6,6 +6,7 @@ import { createBillingIntent } from "@/lib/billing/service";
 import { getPlan, type BillingPlan } from "@/lib/billing/plans";
 import { getPublishableKey } from "@/lib/moyasar/client";
 import { enforceRateLimit } from "@/lib/security/rate-limit";
+import { requirePlatformFeature } from "@/lib/admin/platform-settings";
 
 const BodySchema = z.object({
   plan: z.enum(["lite", "plus", "pro"])
@@ -16,6 +17,8 @@ export async function POST(req: NextRequest) {
     await requireUserApi();
     const merchant = await getCurrentMerchant();
     if (!merchant) return NextResponse.json({ error: "no merchant" }, { status: 400 });
+    // Admin kill switch (SW-17): no new checkouts; confirm/webhook still apply paid intents.
+    await requirePlatformFeature("billing");
 
     const limited = await enforceRateLimit(req, "billing:intent", 10, 60_000, merchant.id);
     if (limited instanceof NextResponse) return limited;

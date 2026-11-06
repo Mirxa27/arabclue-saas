@@ -248,6 +248,27 @@ export const SECRET_GROUPS: SecretGroupDef[] = [
     fields: [{ key: "WATHQ_API_KEY", label: "Wathq API key", required: false, type: "secret" }]
   },
   {
+    id: "company",
+    title: "Company",
+    description: "arabclue's own registration details shown on the public /maroof page",
+    fields: [
+      {
+        key: "COMPANY_CR_NUMBER",
+        label: "Commercial registration (CR) number",
+        required: false,
+        type: "text",
+        hint: "10 digits, shown on /maroof. Read per request — no rebuild needed; while unset the page shows a neutral 'coming soon' line"
+      },
+      {
+        key: "MAROOF_URL",
+        label: "Maroof profile URL",
+        required: false,
+        type: "url",
+        hint: "https link to arabclue's Maroof profile, shown on /maroof"
+      }
+    ]
+  },
+  {
     id: "email",
     title: "Email (Resend)",
     description: "Transactional email: support acknowledgements, ticket relay, AI-employee email channel",
