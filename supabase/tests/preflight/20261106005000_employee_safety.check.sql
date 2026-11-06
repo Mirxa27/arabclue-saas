@@ -1,8 +1,8 @@
 -- After 20261106005000_employee_safety.sql (and later migrations) ran on top of the seed:
 --  * open model-created tasks were handed to the merchant with their kind; closed and
 --    merchant-written tasks untouched; the onboarding task belongs to the merchant;
---  * the oversized config did not abort the migration: its constraint stays NOT VALID (new
---    writes are still checked) while the other bounds are validated;
+--  * the oversized config did not abort the migration; 20261106009000_employee_bounds_repair
+--    later brings the row within the bound (the row is kept) and validates every bound (RE-5);
 --  * a re-run changes nothing.
 do $$
 declare
@@ -25,12 +25,14 @@ begin
       format('task %s: kind %s expected', r.id, r.kind);
   end loop;
 
-  assert not (select convalidated from pg_constraint where conname = 'ai_employees_config_size'),
-    'the config bound must stay NOT VALID while an oversized row exists';
+  assert (select convalidated from pg_constraint where conname = 'ai_employees_config_size'),
+    'the config bound is validated once 20261106009000 repaired the oversized row';
   assert (select convalidated from pg_constraint where conname = 'ai_employees_knowledge_size'),
     'bounds the data satisfies are validated';
   assert (select count(*) from public.ai_employees where id = '00000000-0000-4000-8000-00000000f504') = 1,
-    'the oversized row is kept (the runtime clamps it)';
+    'the oversized row is kept';
+  assert (select octet_length(config::text) <= 16384 from public.ai_employees where id = '00000000-0000-4000-8000-00000000f504'),
+    'the oversized row is within the config bound';
 
   begin
     update public.ai_employees set config = jsonb_build_object('persona_background', repeat('y', 40000))

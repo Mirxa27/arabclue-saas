@@ -131,13 +131,30 @@ describe("PATCH/DELETE /api/employees/:id", () => {
 describe("PATCH /api/employees/:id/status", () => {
   it("toggles status with the service role, scoped to the merchant", async () => {
     useClients(
-      (call) => (call.op === "update" ? { data: { id: EMPLOYEE, status: "active", display_name: "Layla", role_id: "sales-rep" } } : undefined),
-      (call) => (call.table === "ai_employees" ? (call.single ? { data: ownedEmployee("paused") } : { count: 1 }) : undefined)
+      (call) => (call.op === "update" ? { data: { id: EMPLOYEE, status: "paused", display_name: "Layla", role_id: "sales-rep" } } : undefined),
+      (call) => (call.table === "ai_employees" ? (call.single ? { data: ownedEmployee("active") } : { count: 1 }) : undefined)
     );
-    const res = await patchStatus(jsonRequest(`http://localhost/api/employees/${EMPLOYEE}/status`, { status: "active" }, { method: "PATCH" }), ctx);
+    const res = await patchStatus(jsonRequest(`http://localhost/api/employees/${EMPLOYEE}/status`, { status: "paused" }, { method: "PATCH" }), ctx);
     expect(res.status).toBe(200);
     const [update] = h.service.writes();
     expect(update).toMatchObject({ table: "ai_employees", op: "update" });
     expect(h.service.filter(update, "merchant_id")).toBe(h.merchant.id);
+  });
+
+  it("activates through the service-role activate_ai_employee RPC, scoped to the merchant (RE-3)", async () => {
+    useClients(
+      () => undefined,
+      (call) => (call.table === "ai_employees" ? (call.single ? { data: ownedEmployee("paused") } : { count: 1 }) : undefined),
+      (fn) =>
+        fn === "activate_ai_employee"
+          ? { data: { outcome: "activated", employee: { ...ownedEmployee("active"), display_name: "Layla", role_id: "sales-rep" } } }
+          : undefined
+    );
+    const res = await patchStatus(jsonRequest(`http://localhost/api/employees/${EMPLOYEE}/status`, { status: "active" }, { method: "PATCH" }), ctx);
+    expect(res.status).toBe(200);
+    const [rpc] = h.service.rpcCalls;
+    expect(rpc).toMatchObject({ fn: "activate_ai_employee", args: { p_merchant_id: h.merchant.id, p_employee_id: EMPLOYEE, p_limit: 5 } });
+    expect(h.service.writes()).toHaveLength(0);
+    expect(h.user.writes()).toHaveLength(0);
   });
 });

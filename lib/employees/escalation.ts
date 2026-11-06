@@ -11,13 +11,23 @@
  *      is configured) — the outcome is recorded on the task, never assumed.
  * `ok` is false unless 1 (and 2, for a customer conversation) succeeded, so the reply never
  * tells a customer a human was looped in when nobody was.
+ *
+ * RE-2: the email goes out from arabclue's own sender, and a customer decides when an
+ * escalation happens, so it is fixed copy: the role (from the catalog), the channel kind and
+ * the dashboard link — never the contact's name or address, the escalation reason or anything
+ * else a customer or the model wrote (that stays in the dashboard). At most
+ * ESCALATION_EMAILS_PER_HOUR emails per employee: the budget is claimed atomically in the
+ * database (claim_owner_notification); beyond it the escalation is still recorded in the app
+ * (task, conversation status, event) and `notified` is "rate_limited".
  */
 import { getServiceSupabase } from "@/lib/db/supabase";
 import { isPlatformEmailConfigured, platformFromAddress, sendPlatformEmail } from "@/lib/email/platform";
 import { reportError } from "@/lib/observability/error-reporter";
+import { getRole } from "./catalog";
+import { sliceText, TASK_TITLE_MAX_CHARS } from "./text-bounds";
 import type { AIConversationRow, AIEmployeeRow, TurnOrigin } from "./types";
 
-export type EscalationNotice = "email" | "not_configured" | "no_owner_email" | "failed";
+export type EscalationNotice = "email" | "not_configured" | "no_owner_email" | "rate_limited" | "failed";
 
 export type EscalationOutcome = {
   ok: boolean;
@@ -29,8 +39,63 @@ export type EscalationOutcome = {
 
 const MAX_REASON = 400;
 
+/** Escalation emails one employee may send its owner per rolling hour (RE-2). */
+export const ESCALATION_EMAILS_PER_HOUR = 10;
+const EMAIL_BUDGET_WINDOW_SECONDS = 3600;
+
+/** Fixed labels for the channel kinds a conversation can have; anything else gets the fallback. */
+const CHANNEL_LABELS: Readonly<Record<string, { ar: string; en: string }>> = {
+  whatsapp: { ar: "واتساب", en: "WhatsApp" },
+  telegram: { ar: "تيليجرام", en: "Telegram" },
+  slack: { ar: "سلاك", en: "Slack" },
+  email: { ar: "البريد الإلكتروني", en: "Email" },
+  gmail: { ar: "Gmail", en: "Gmail" },
+  twilio_sms: { ar: "الرسائل النصية (SMS)", en: "SMS" },
+  meta: { ar: "ماسنجر", en: "Messenger" },
+  instagram: { ar: "إنستغرام", en: "Instagram" },
+  webhook: { ar: "Webhook", en: "Webhook" },
+  dashboard: { ar: "لوحة التحكم", en: "Dashboard" }
+};
+const FALLBACK_CHANNEL_LABEL = { ar: "قناة مراسلة", en: "Messaging channel" };
+
 function clip(value: string | undefined | null, n: number): string {
-  return (value ?? "").replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, "").trim().slice(0, n);
+  return sliceText((value ?? "").replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, "").trim(), n);
+}
+
+export function channelLabel(channel: string | null | undefined): { ar: string; en: string } {
+  return (channel && Object.hasOwn(CHANNEL_LABELS, channel) ? CHANNEL_LABELS[channel] : undefined) ?? FALLBACK_CHANNEL_LABEL;
+}
+
+/**
+ * The owner email for an escalation — fixed copy only (RE-2). The employee's role comes from
+ * the catalog and the link from NEXT_PUBLIC_SITE_URL + the employee id; nothing a customer, the
+ * model or a channel provider supplied is included.
+ */
+export function escalationEmail(
+  emp: Pick<AIEmployeeRow, "id" | "role_id">,
+  channel: string | null | undefined
+): { subject: string; text: string } {
+  const role = getRole(emp.role_id);
+  const who = role
+    ? { ar: `موظفك الذكي (${role.arabicName})`, en: `Your AI employee (${role.name})` }
+    : { ar: "موظفك الذكي", en: "Your AI employee" };
+  const label = channelLabel(channel);
+  const site = process.env.NEXT_PUBLIC_SITE_URL?.trim().replace(/\/+$/, "");
+  const link = site && /^https?:\/\//i.test(site) ? `${site}/employees/${emp.id}` : null;
+  const text = [
+    `حوّل إليك ${who.ar} محادثة، وهي بانتظار ردّك.`,
+    `القناة: ${label.ar}`,
+    link ? `افتحها من لوحة التحكم: ${link}` : "افتحها من صفحة الموظفين الأذكياء في لوحة تحكم arabclue.",
+    "لا يتضمن هذا البريد رسائل العميل؛ تجدها في لوحة التحكم فقط.",
+    "",
+    `${who.en} handed a conversation over to you. It is waiting for your reply.`,
+    `Channel: ${label.en}`,
+    link ? `Open it in your dashboard: ${link}` : "Open it from the AI employees page of your arabclue dashboard.",
+    "This email never includes the customer's messages; read them in your dashboard.",
+    "",
+    "— arabclue"
+  ].join("\n");
+  return { subject: "محادثة بانتظار ردّك | A conversation is waiting for your reply", text };
 }
 
 async function ownerEmail(merchantId: string): Promise<string | null> {
@@ -46,36 +111,46 @@ async function ownerEmail(merchantId: string): Promise<string | null> {
   }
 }
 
-async function notifyOwner(emp: AIEmployeeRow, reason: string, conversation: AIConversationRow | null): Promise<EscalationNotice> {
+/** Take one of the employee's hourly escalation emails; the claim's action id, or null when spent. */
+async function claimEmailBudget(emp: AIEmployeeRow, taskId: string): Promise<{ id: number } | "spent" | "error"> {
+  const sb = getServiceSupabase();
+  const { data, error } = await sb.rpc("claim_owner_notification", {
+    p_employee_id: emp.id,
+    p_channel: "email",
+    p_limit: ESCALATION_EMAILS_PER_HOUR,
+    p_window_seconds: EMAIL_BUDGET_WINDOW_SECONDS,
+    p_payload: { kind: "escalation", task_id: taskId }
+  });
+  if (error) {
+    reportError(new Error(`claim_owner_notification: ${error.message}`), { merchantId: emp.merchant_id, extra: { employeeId: emp.id } });
+    return "error";
+  }
+  if (data === null || data === undefined) return "spent";
+  const id = Number(data);
+  return Number.isSafeInteger(id) ? { id } : "error";
+}
+
+async function settleClaim(claimId: number, outcome: "success" | "failure", result: Record<string, unknown>): Promise<void> {
+  const { error } = await getServiceSupabase().from("ai_employee_actions").update({ status: outcome, result }).eq("id", claimId);
+  if (error) reportError(new Error(`owner_notification ${claimId}: ${error.message}`), { extra: { step: "escalation_email_settle" } });
+}
+
+async function notifyOwner(emp: AIEmployeeRow, conversation: AIConversationRow | null, taskId: string): Promise<EscalationNotice> {
   if (!isPlatformEmailConfigured()) return "not_configured";
-  const from = platformFromAddress();
   const to = await ownerEmail(emp.merchant_id);
   if (!to) return "no_owner_email";
-  const site = process.env.NEXT_PUBLIC_SITE_URL?.trim().replace(/\/+$/, "");
-  const link = site ? `${site}/employees/${emp.id}` : null;
-  const channel = conversation?.channel ?? "dashboard";
-  const contact = conversation?.contact_name ?? conversation?.external_id ?? "";
-  const text = [
-    `${emp.display_name} حوّل محادثة إليك وتحتاج متابعتك.`,
-    `القناة: ${channel}${contact ? ` — ${contact}` : ""}`,
-    `السبب: ${reason}`,
-    ...(link ? [`افتح المحادثة: ${link}`] : []),
-    "",
-    `${emp.display_name} handed a conversation to you and it needs your attention.`,
-    `Channel: ${channel}${contact ? ` — ${contact}` : ""}`,
-    `Reason: ${reason}`,
-    ...(link ? [`Open it: ${link}`] : []),
-    "",
-    "— arabclue"
-  ].join("\n");
+  const claim = await claimEmailBudget(emp, taskId);
+  if (claim === "spent") return "rate_limited";
+  if (claim === "error") return "failed";
+
+  const message = escalationEmail(emp, conversation?.channel ?? "dashboard");
   try {
-    await sendPlatformEmail(
-      { from },
-      { to, subject: `تحويل محادثة من ${emp.display_name} | Conversation handed to you`, text }
-    );
+    const sent = await sendPlatformEmail({ from: platformFromAddress() }, { to, ...message });
+    await settleClaim(claim.id, "success", { email_id: sent.id || null, task_id: taskId });
     return "email";
   } catch (err) {
     reportError(err, { merchantId: emp.merchant_id, extra: { step: "escalation_email", employeeId: emp.id } });
+    await settleClaim(claim.id, "failure", { error: "send failed", task_id: taskId });
     return "failed";
   }
 }
@@ -96,7 +171,7 @@ export async function escalateToHuman(args: {
     .from("ai_employee_tasks")
     .insert({
       employee_id: emp.id,
-      title: `Escalation: ${reason}`.slice(0, 200),
+      title: sliceText(`Escalation: ${reason}`, TASK_TITLE_MAX_CHARS),
       description: clip(args.summary, 1000) || null,
       priority: "urgent",
       due_at: new Date().toISOString(),
@@ -143,7 +218,7 @@ export async function escalateToHuman(args: {
   });
   if (eventErr) reportError(new Error(`employee.escalation event: ${eventErr.message}`), { merchantId: emp.merchant_id });
 
-  const notified = await notifyOwner(emp, reason, conversation);
+  const notified = await notifyOwner(emp, conversation, taskId);
   await sb
     .from("ai_employee_tasks")
     .update({ result: { notified, conversation_escalated: conversationEscalated } })

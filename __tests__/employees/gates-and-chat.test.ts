@@ -106,11 +106,17 @@ beforeEach(() => {
   h.employee = employee();
   h.seated = 1;
   useUserDb();
-  h.service = createMemoryDb({
-    ai_employees: [employee()],
-    merchants: [{ id: "m1", plan: "plus", subscription_status: "active", dpa_version: "2026-11" }],
-    ai_employee_conversations: [{ id: "44444444-4444-4444-8444-444444444444", employee_id: EMP, channel: "dashboard", external_id: `dashboard:${EMP}`, status: "open" }]
-  });
+  h.service = createMemoryDb(
+    {
+      ai_employees: [employee()],
+      merchants: [{ id: "m1", plan: "plus", subscription_status: "active", dpa_version: "2026-11" }],
+      ai_employee_conversations: [{ id: "44444444-4444-4444-8444-444444444444", employee_id: EMP, channel: "dashboard", external_id: `dashboard:${EMP}`, status: "open" }]
+    },
+    {
+      // RE-3: the switch to active is the atomic activate_ai_employee() RPC (its SQL: supabase/tests/91_*).
+      rpc: (fn) => (fn === "activate_ai_employee" ? { data: { outcome: "activated", employee: { ...h.employee, status: "active" } } } : undefined)
+    }
+  );
 });
 
 describe("run gate (pure)", () => {

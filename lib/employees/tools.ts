@@ -19,11 +19,15 @@
  *     request (lib/employees/recipients.ts). Calendar invitations go only to attendees the
  *     merchant named.
  *   • Tool-initiated sends are capped per employee per hour.
+ *   • A message sent on the merchant's behalf (send_message now, or a follow-up later) belongs
+ *     to the recipient's own conversation (RE-4): a follow-up stores that conversation, and the
+ *     sent text is kept there — never in the dashboard thread it was asked for in.
  */
 
 import { z } from "zod";
 import { aiStructured } from "@/lib/ai/providers";
 import { getServiceSupabase } from "@/lib/db/supabase";
+import { reportError } from "@/lib/observability/error-reporter";
 import { rateLimit } from "@/lib/security/rate-limit";
 import type {
   AIConversationRow,
@@ -37,8 +41,11 @@ import { refreshGoogleAccessToken } from "./channels/gmail";
 import { persistRefreshedCredentials } from "./channel-credentials";
 import { escalateToHuman } from "./escalation";
 import { lookupOrder } from "./order-lookup";
+import { recipientConversation } from "./recipient-conversation";
 import { checkRecipient, normalizeRecipient } from "./recipients";
 import { sendThroughIntegration } from "./send";
+import { HUMAN_TAKEOVER_STATUSES } from "./conversation-status";
+import { sliceText, TASK_DESCRIPTION_MAX_CHARS, TASK_TITLE_MAX_CHARS } from "./text-bounds";
 
 // ─── tool schema ───────────────────────────────────────────────────────────
 
@@ -235,7 +242,29 @@ export async function executeTool(args: ToolContext & { decision: ToolDecision }
 // ─── helpers ───────────────────────────────────────────────────────────────
 
 function clip(value: string | undefined | null, n: number): string {
-  return (value ?? "").replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, "").trim().slice(0, n);
+  return sliceText((value ?? "").replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, "").trim(), n);
+}
+
+/**
+ * Keep a copy of a message sent on the merchant's behalf in the recipient's own conversation
+ * (RE-4), so the merchant sees what the recipient received and the next AI reply there has it.
+ * Best effort — the message is already sent; returns the conversation id, or null.
+ */
+async function storeInRecipientConversation(
+  ctx: ToolContext,
+  channel: MessagingChannel,
+  to: string,
+  body: string
+): Promise<string | null> {
+  try {
+    const conv = await recipientConversation(ctx.employee.id, channel, to);
+    const { persistMessage } = await import("./runtime");
+    await persistMessage({ conversationId: conv.id, role: "assistant", content: body });
+    return conv.id;
+  } catch (err) {
+    reportError(err, { merchantId: ctx.employee.merchant_id, extra: { step: "sent_message_store", employeeId: ctx.employee.id } });
+    return null;
+  }
 }
 
 async function countOpenConversationTasks(conversationId: string, kinds: string[]): Promise<number | null> {
@@ -318,11 +347,13 @@ async function requestApproval(ctx: ToolContext, d: ToolDecision): Promise<ToolE
     .from("ai_employee_tasks")
     .insert({
       employee_id: ctx.employee.id,
-      title: `Customer request awaiting your approval (${asked}): ${summary}`.slice(0, 200),
-      description:
+      title: sliceText(`Customer request awaiting your approval (${asked}): ${summary}`, TASK_TITLE_MAX_CHARS),
+      description: sliceText(
         `Requested by a customer on ${conv?.channel ?? "a channel"}${conv?.external_id ? ` (${conv.external_id})` : ""}. ` +
-        "Not done automatically — customer messages cannot trigger messages to others, bookings or invoices. " +
-        "Review it and act yourself if appropriate.",
+          "Not done automatically — customer messages cannot trigger messages to others, bookings or invoices. " +
+          "Review it and act yourself if appropriate.",
+        TASK_DESCRIPTION_MAX_CHARS
+      ),
       priority: "high",
       due_at: new Date().toISOString(),
       source: "autonomous",
@@ -399,7 +430,12 @@ async function execSendMessage(ctx: ToolContext, d: ToolDecision): Promise<ToolE
     return { ok: false, tool: "send_message", error: "hourly limit for messages sent by this employee reached" };
   }
   const { remoteId } = await sendThroughIntegration(integ, { to: check.to, body: d.body, subject: d.subject });
-  return { ok: true, tool: "send_message", output: { remote_id: remoteId, channel: d.channel, to: check.to } };
+  const conversationId = await storeInRecipientConversation(ctx, d.channel, check.to, d.body);
+  return {
+    ok: true,
+    tool: "send_message",
+    output: { remote_id: remoteId, channel: d.channel, to: check.to, ...(conversationId ? { conversation_id: conversationId } : {}) }
+  };
 }
 
 async function execScheduleFollowup(ctx: ToolContext, d: ToolDecision): Promise<ToolExecutionResult> {
@@ -408,6 +444,8 @@ async function execScheduleFollowup(ctx: ToolContext, d: ToolDecision): Promise<
 
   let channel: MessagingChannel;
   let to: string;
+  let conversationId: string;
+  let note: string | undefined;
   let minutes = d.followup_in_minutes ?? 60;
   if (ctx.origin === "inbound_channel") {
     // Server-forced: the follow-up can only go to this customer, on this conversation's channel.
@@ -420,6 +458,7 @@ async function execScheduleFollowup(ctx: ToolContext, d: ToolDecision): Promise<
       return { ok: false, tool: "schedule_followup", error: "this conversation already has follow-ups scheduled" };
     }
     ({ channel, to } = target);
+    conversationId = ctx.conversation.id;
     minutes = Math.min(minutes, MAX_CUSTOMER_FOLLOWUP_MINUTES);
   } else {
     if (!d.channel || !d.to) return { ok: false, tool: "schedule_followup", error: "channel and to are required" };
@@ -433,6 +472,14 @@ async function execScheduleFollowup(ctx: ToolContext, d: ToolDecision): Promise<
     if (!check.ok) return { ok: false, tool: "schedule_followup", error: check.error };
     channel = d.channel;
     to = check.to;
+    // RE-4: the follow-up belongs to the recipient's own thread (created when the employee has
+    // never talked to them) — not to the dashboard conversation it was asked for in.
+    const thread = await recipientConversation(ctx.employee.id, channel, to);
+    conversationId = thread.id;
+    if (HUMAN_TAKEOVER_STATUSES.has(thread.status)) {
+      note =
+        "That conversation is currently with the team (human takeover): when it is due, the follow-up is handed to the owner instead of being sent, unless the conversation is handed back to the employee first. Tell the owner.";
+    }
   }
 
   const dueAt = new Date(Date.now() + minutes * 60_000).toISOString();
@@ -449,7 +496,7 @@ async function execScheduleFollowup(ctx: ToolContext, d: ToolDecision): Promise<
       status: "todo",
       assignee: "agent",
       kind: "followup",
-      conversation_id: ctx.conversation?.id ?? null,
+      conversation_id: conversationId,
       payload: {
         origin: ctx.origin,
         action: "send_message",
@@ -462,7 +509,12 @@ async function execScheduleFollowup(ctx: ToolContext, d: ToolDecision): Promise<
     .select("id")
     .single();
   if (error || !data) return { ok: false, tool: "schedule_followup", error: "could not schedule the follow-up" };
-  return { ok: true, tool: "schedule_followup", output: { task_id: (data as { id: string }).id, due_at: dueAt, channel } };
+  return {
+    ok: true,
+    tool: "schedule_followup",
+    output: { task_id: (data as { id: string }).id, due_at: dueAt, channel },
+    ...(note ? { note } : {})
+  };
 }
 
 const ISO_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,6})?)?(Z|[+-]\d{2}:\d{2})?$/;
