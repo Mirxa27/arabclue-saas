@@ -59,7 +59,7 @@ Minimum bootstrap for first boot:
 
 ### 1.3 Cron jobs (Hostinger hPanel)
 
-Vercel Cron is **not** used on Hostinger. Use hPanel **Advanced → Cron Jobs** (or `scripts/hostinger-cron.sh`, which runs both jobs):
+Vercel Cron is **not** used on Hostinger. Use hPanel **Advanced → Cron Jobs** — the simplest setup is one job that runs `scripts/hostinger-cron.sh` **every 5 minutes**; the script calls each endpoint on its own schedule below:
 
 | Job | Schedule | Endpoint |
 |-----|----------|----------|
@@ -67,7 +67,7 @@ Vercel Cron is **not** used on Hostinger. Use hPanel **Advanced → Cron Jobs** 
 | AI employees tick | `*/5 * * * *` | `GET /api/cron/employees-tick` |
 | ZATCA sweep | `*/10 * * * *` | `GET /api/zatca/sweep` (resends undelivered invoices, invoices waiting Salla orders; 503 while `CRON_SECRET` is unset) |
 
-**Auth:** `Authorization: Bearer YOUR_CRON_SECRET` (or `x-cron-secret` / `?secret=`).
+**Auth:** `Authorization: Bearer YOUR_CRON_SECRET` (or the `x-cron-secret` header). A secret in the query string is **not** accepted (URLs end up in access logs). Every cron endpoint answers **503 `not_configured`** while `CRON_SECRET` is unset (only `next dev` allows an unset secret).
 
 The employees tick advances task queues, writes heartbeats, and enforces trial/subscription billing (trial end → `past_due` + `paused`).
 
@@ -77,7 +77,7 @@ The employees tick advances task queues, writes heartbeats, and enforces trial/s
 curl -fsS -H "Authorization: Bearer YOUR_CRON_SECRET" "https://arabclue.com/api/cron/social-scheduler"
 ```
 
-**Recommended:** run `scripts/hostinger-cron.sh` every 5 minutes so social (15m effective) and employees (5m) both stay current.
+**Recommended:** run `scripts/hostinger-cron.sh` every 5 minutes (`*/5 * * * *`) with `CRON_SECRET` set in the job's environment (and `ARABCLUE_BASE_URL` if the site is not `https://arabclue.com`). Each run calls the employees tick, the ZATCA sweep when the minute is a multiple of 10 and the social scheduler when it is a multiple of 15. A failing endpoint does not stop the others, and the script exits non-zero so hPanel's cron mail reports it.
 
 > **hPanel only:** Shared Hostinger SSH does not include the `crontab` command. Create the job under **Advanced → Cron Jobs** in hPanel for `arabclue.com`. Remove any legacy jobs that run `public_html/artisan` (old Laravel app) — those fail with “Could not open input file: artisan”.
 
