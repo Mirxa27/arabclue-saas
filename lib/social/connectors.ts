@@ -177,52 +177,42 @@ export function whatsappConnector(args: { phoneNumberId: string; accessToken: st
 }
 
 // ─── Builder ───────────────────────────────────────────────────────────────
-export function buildConnectorsFromEnv(): PlatformConnector[] {
-  const out: PlatformConnector[] = [];
-  if (process.env.META_IG_USER_ID && process.env.META_PAGE_ACCESS_TOKEN)
-    out.push(instagramConnector({ igUserId: process.env.META_IG_USER_ID, accessToken: process.env.META_PAGE_ACCESS_TOKEN }));
-  if (process.env.X_BEARER) out.push(xConnector({ bearer: process.env.X_BEARER }));
-  if (process.env.LINKEDIN_ACTOR_URN && process.env.LINKEDIN_ACCESS_TOKEN)
-    out.push(linkedInConnector({ actorUrn: process.env.LINKEDIN_ACTOR_URN, accessToken: process.env.LINKEDIN_ACCESS_TOKEN }));
-  if (process.env.TIKTOK_ACCESS_TOKEN) out.push(tikTokConnector({ accessToken: process.env.TIKTOK_ACCESS_TOKEN }));
-  if (process.env.WHATSAPP_PHONE_ID && process.env.WHATSAPP_ACCESS_TOKEN)
-    out.push(whatsappConnector({ phoneNumberId: process.env.WHATSAPP_PHONE_ID, accessToken: process.env.WHATSAPP_ACCESS_TOKEN }));
-  return out;
-}
-
 type SocialChannelRow = {
   platform: string;
   external_id: string | null;
   access_token_encrypted: string | null;
 };
 
-/** Per-merchant connectors from social_channels, with env fallback for shared platform keys. */
+/**
+ * Per-merchant connectors built ONLY from the merchant's own connected
+ * social_channels. There is deliberately no fallback to platform-wide env
+ * tokens: the scheduler publishes every merchant's posts, so a fallback would
+ * publish a merchant's content on the platform operator's own accounts.
+ * A platform the merchant has not connected simply gets no connector.
+ */
 export function buildConnectorsForMerchant(channels: SocialChannelRow[]): PlatformConnector[] {
   const out: PlatformConnector[] = [];
   const byPlatform = new Map(channels.map((c) => [c.platform, c]));
 
   const ig = byPlatform.get("instagram");
-  const igUserId = ig?.external_id ?? process.env.META_IG_USER_ID;
-  const igToken = decryptSecret(ig?.access_token_encrypted) || process.env.META_PAGE_ACCESS_TOKEN;
-  if (igUserId && igToken) out.push(instagramConnector({ igUserId, accessToken: igToken }));
+  const igToken = decryptSecret(ig?.access_token_encrypted);
+  if (ig?.external_id && igToken) out.push(instagramConnector({ igUserId: ig.external_id, accessToken: igToken }));
 
   const x = byPlatform.get("x");
-  const xBearer = decryptSecret(x?.access_token_encrypted) || process.env.X_BEARER;
+  const xBearer = decryptSecret(x?.access_token_encrypted);
   if (xBearer) out.push(xConnector({ bearer: xBearer }));
 
   const li = byPlatform.get("linkedin");
-  const liUrn = li?.external_id ?? process.env.LINKEDIN_ACTOR_URN;
-  const liToken = decryptSecret(li?.access_token_encrypted) || process.env.LINKEDIN_ACCESS_TOKEN;
-  if (liUrn && liToken) out.push(linkedInConnector({ actorUrn: liUrn, accessToken: liToken }));
+  const liToken = decryptSecret(li?.access_token_encrypted);
+  if (li?.external_id && liToken) out.push(linkedInConnector({ actorUrn: li.external_id, accessToken: liToken }));
 
   const tt = byPlatform.get("tiktok");
-  const ttToken = decryptSecret(tt?.access_token_encrypted) || process.env.TIKTOK_ACCESS_TOKEN;
+  const ttToken = decryptSecret(tt?.access_token_encrypted);
   if (ttToken) out.push(tikTokConnector({ accessToken: ttToken }));
 
   const wa = byPlatform.get("whatsapp");
-  const waPhone = wa?.external_id ?? process.env.WHATSAPP_PHONE_ID;
-  const waToken = decryptSecret(wa?.access_token_encrypted) || process.env.WHATSAPP_ACCESS_TOKEN;
-  if (waPhone && waToken) out.push(whatsappConnector({ phoneNumberId: waPhone, accessToken: waToken }));
+  const waToken = decryptSecret(wa?.access_token_encrypted);
+  if (wa?.external_id && waToken) out.push(whatsappConnector({ phoneNumberId: wa.external_id, accessToken: waToken }));
 
   return out;
 }

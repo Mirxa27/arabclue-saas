@@ -86,12 +86,13 @@ export async function GET(req: NextRequest) {
           .limit(agents.social.maxPostsPerRun ?? 50);
         return ((data ?? []) as SocialPostRow[]).map(rowToScheduledPost);
       },
-      async markPublished(id, when, remoteIds) {
+      async markPublished(id, when, remoteIds, note) {
         await supabase
           .from("social_posts")
           .update({
             status: "published",
             published_at: when,
+            error: note ?? null,
             ...(remoteIds && Object.keys(remoteIds).length ? { remote_ids: remoteIds } : {})
           })
           .eq("id", id);

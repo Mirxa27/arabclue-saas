@@ -199,7 +199,8 @@ export type ScheduledPost = {
 export interface SocialStore {
   upsertPost(p: ScheduledPost): Promise<void>;
   listDue(beforeISO: string): Promise<ScheduledPost[]>;
-  markPublished(id: string, when: string, remoteIds?: Record<string, string>): Promise<void>;
+  /** `note` records platforms that were skipped when only some targets were published. */
+  markPublished(id: string, when: string, remoteIds?: Record<string, string>, note?: string): Promise<void>;
   markFailed(id: string, error: string): Promise<void>;
 }
 
@@ -221,15 +222,31 @@ export async function scheduler(opts: {
           : (opts.connectors ?? []);
 
       const remoteIds: Record<string, string> = {};
+      const skipped: string[] = [];
       for (const platform of sp.post.platforms) {
         const conn = connectors.find((c) => c.platform === platform);
         const copy = sp.copies[platform];
-        if (!conn || !copy) continue;
+        if (!conn) {
+          skipped.push(`${platform}: account not connected`);
+          continue;
+        }
+        if (!copy) {
+          skipped.push(`${platform}: no copy for this platform`);
+          continue;
+        }
         const { remoteId } = await conn.publish({ copy, visualBrief: sp.visualBrief });
         remoteIds[platform] = remoteId;
       }
-      await opts.store.markPublished(sp.id, new Date().toISOString(), remoteIds);
-      results.push({ id: sp.id, ok: true });
+      // Never report a post as published when nothing went out.
+      if (Object.keys(remoteIds).length === 0) {
+        const msg = `Not published — ${skipped.join("; ") || "no target platforms"}`;
+        await opts.store.markFailed(sp.id, msg);
+        results.push({ id: sp.id, ok: false, error: msg });
+        continue;
+      }
+      const note = skipped.length ? `Partially published — skipped ${skipped.join("; ")}` : undefined;
+      await opts.store.markPublished(sp.id, new Date().toISOString(), remoteIds, note);
+      results.push({ id: sp.id, ok: true, ...(note ? { error: note } : {}) });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       await opts.store.markFailed(sp.id, msg);
