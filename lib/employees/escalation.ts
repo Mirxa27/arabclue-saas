@@ -47,8 +47,8 @@ async function ownerEmail(merchantId: string): Promise<string | null> {
 }
 
 async function notifyOwner(emp: AIEmployeeRow, reason: string, conversation: AIConversationRow | null): Promise<EscalationNotice> {
+  if (!isPlatformEmailConfigured()) return "not_configured";
   const from = platformFromAddress();
-  if (!isPlatformEmailConfigured() || !from) return "not_configured";
   const to = await ownerEmail(emp.merchant_id);
   if (!to) return "no_owner_email";
   const site = process.env.NEXT_PUBLIC_SITE_URL?.trim().replace(/\/+$/, "");

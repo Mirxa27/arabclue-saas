@@ -23,10 +23,9 @@ export function isPlatformEmailConfigured(): boolean {
   return Boolean(process.env.RESEND_API_KEY?.trim());
 }
 
-/** The platform's default sender address (EMAIL_FROM, else SUPPORT_FROM_EMAIL). */
-export function platformFromAddress(): string | null {
-  const from = process.env.EMAIL_FROM?.trim() || process.env.SUPPORT_FROM_EMAIL?.trim();
-  return from || null;
+/** The platform's sender address: EMAIL_FROM, else SUPPORT_FROM_EMAIL, else support@arabclue.com (as lib/support/notify.ts). */
+export function platformFromAddress(): string {
+  return process.env.EMAIL_FROM?.trim() || process.env.SUPPORT_FROM_EMAIL?.trim() || "support@arabclue.com";
 }
 
 export async function sendPlatformEmail(sender: PlatformSender, message: PlatformEmailMessage): Promise<{ id: string }> {

@@ -167,6 +167,18 @@ describe("SW-7: one-click OAuth → credentials the adapters can send with", () 
     expect(auths).toEqual(["Bearer xoxb-1-abc", "Bearer xoxb-legacy-token"]);
   });
 
+  it("an old one-click row that can never send (WhatsApp without a number) is flagged error instead of staying 'connected'", async () => {
+    h.db = createMemoryDb({
+      ai_employee_integrations: [{ id: "i-wa-old", employee_id: "e1", kind: "whatsapp", status: "connected", config: { connected_via: "oauth" }, credentials: {} }]
+    });
+    const old = { ...row("whatsapp", { access_token: "EAAold", token_type: "bearer" }, { connected_via: "oauth" }), id: "i-wa-old" };
+    await expect(sendThroughIntegration(old, { to: "966501112222", body: "hi" })).rejects.toThrow(/incomplete \(missing phone_number_id\)/);
+    expect(fetchMock).not.toHaveBeenCalled();
+    const stored = h.db.table("ai_employee_integrations")[0];
+    expect(stored.status).toBe("error");
+    expect((stored.config as { error: { reason: string } }).error.reason).toBe("credentials_incomplete");
+  });
+
   it("Slack: a non-bot token is refused instead of saving a channel that cannot post", () => {
     expect(() => slackSetup({ access_token: "xoxp-user-token" })).toThrow(OAuthChannelSetupError);
   });

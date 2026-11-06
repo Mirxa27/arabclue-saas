@@ -547,7 +547,7 @@ async function claimTask(task: AITaskRow, now: Date): Promise<boolean> {
     .eq("assignee", "agent")
     .eq("status", task.status);
   if (task.status === "in_progress") {
-    q = q.or(`started_at.is.null,started_at.lt.${new Date(now.getTime() - STALE_IN_PROGRESS_MS).toISOString()}`);
+    q = q.or(`started_at.is.null,started_at.lt."${new Date(now.getTime() - STALE_IN_PROGRESS_MS).toISOString()}"`);
   }
   const { data, error } = await q.select("id").maybeSingle();
   return !error && Boolean(data);
@@ -720,11 +720,12 @@ export async function tick(employeeId: string): Promise<TickResult> {
         break;
       }
       case "handed_over": {
+        // blocked + owned by the merchant: the tick never retries it, the note says why.
         await sb
           .from("ai_employee_tasks")
           .update({
             assignee: "human",
-            status: "todo",
+            status: "blocked",
             started_at: null,
             result: { ...prior, handed_over_at: new Date().toISOString(), note: outcome.note }
           })

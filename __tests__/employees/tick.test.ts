@@ -117,7 +117,7 @@ describe("tick(): merchant-owned work is never auto-completed", () => {
     seed([task({ title: "Escalate to human: legal threat", kind: "escalation", priority: "urgent" })]);
     const out = await tick(EMP);
     expect(out).toMatchObject({ tasksAdvanced: 0, handedOver: 1 });
-    expect(byTitle("Escalate to human: legal threat")).toMatchObject({ status: "todo", assignee: "human" });
+    expect(byTitle("Escalate to human: legal threat")).toMatchObject({ status: "blocked", assignee: "human" });
     expect(actions("task_handed_over")[0]).toMatchObject({ status: "retry" });
     expect(actions("complete_task")).toHaveLength(0);
   });
@@ -182,7 +182,7 @@ describe("tick(): free-form agent tasks", () => {
     const out = await tick(EMP);
     expect(out).toMatchObject({ tasksAdvanced: 0, handedOver: 1 });
     const t = byTitle("Write three captions for the new abaya line");
-    expect(t).toMatchObject({ status: "todo", assignee: "human" });
+    expect(t).toMatchObject({ status: "blocked", assignee: "human" });
     expect(String((t.result as { note: string }).note)).toContain("Needs the owner's product photos");
     expect(actions("complete_task")).toHaveLength(0);
     expect(aiText).not.toHaveBeenCalled();
