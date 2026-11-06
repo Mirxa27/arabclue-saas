@@ -111,9 +111,22 @@ export const SECRET_GROUPS: SecretGroupDef[] = [
     description: "OAuth and webhooks for social handover",
     fields: [
       { key: "META_APP_ID", label: "Meta app ID", required: true, type: "text" },
-      { key: "META_APP_SECRET", label: "Meta app secret", required: true, type: "secret" },
+      {
+        key: "META_APP_SECRET",
+        label: "Meta app secret",
+        required: true,
+        type: "secret",
+        hint: "Verifies X-Hub-Signature-256 on /api/meta/webhook — deliveries are refused (503) while unset"
+      },
       { key: "META_REDIRECT_URI", label: "Meta redirect URI", required: false, type: "url" },
-      { key: "META_WEBHOOK_VERIFY_TOKEN", label: "Meta webhook verify token", required: true, type: "secret" }
+      { key: "META_WEBHOOK_VERIFY_TOKEN", label: "Meta webhook verify token", required: true, type: "secret" },
+      {
+        key: "META_GRAPH_VERSION",
+        label: "Meta Graph API version",
+        required: false,
+        type: "text",
+        hint: "e.g. v26.0 — overrides the built-in default in lib/meta/graph.ts for every Graph / Facebook Login call"
+      }
     ]
   },
   {
@@ -127,7 +140,34 @@ export const SECRET_GROUPS: SecretGroupDef[] = [
       { key: "X_CLIENT_SECRET", label: "X client secret", required: true, type: "secret" },
       { key: "TIKTOK_CLIENT_KEY", label: "TikTok client key", required: true, type: "text" },
       { key: "TIKTOK_CLIENT_SECRET", label: "TikTok client secret", required: true, type: "secret" },
-      { key: "SOCIAL_INBOUND_SECRET", label: "Social inbound bridge", required: false, type: "secret" }
+      {
+        key: "SOCIAL_INBOUND_SECRET",
+        label: "Social inbound bridge",
+        required: false,
+        type: "secret",
+        hint: "Bearer token for /api/social/inbound; blank falls back to CRON_SECRET"
+      }
+    ]
+  },
+  {
+    id: "employee_channels",
+    title: "AI employee channels",
+    description: "Fallback secrets for per-employee channel webhooks (per-integration values take precedence)",
+    fields: [
+      {
+        key: "SLACK_SIGNING_SECRET",
+        label: "Slack signing secret (platform Slack app)",
+        required: false,
+        type: "secret",
+        hint: "Verifies Slack events for employees connected through the platform Slack app; events are refused (503) when neither this nor the employee's signing_secret is set"
+      },
+      {
+        key: "WHATSAPP_VERIFY_TOKEN",
+        label: "WhatsApp webhook verify token (fallback)",
+        required: false,
+        type: "secret",
+        hint: "Used by the webhook handshake only when an employee's WhatsApp integration has no verify_token"
+      }
     ]
   },
   {
@@ -137,7 +177,13 @@ export const SECRET_GROUPS: SecretGroupDef[] = [
     fields: [
       { key: "MOYASAR_PUBLIC_KEY", label: "Moyasar public key", required: true, type: "text" },
       { key: "MOYASAR_SECRET_KEY", label: "Moyasar secret key", required: true, type: "secret" },
-      { key: "MOYASAR_WEBHOOK_SECRET", label: "Moyasar webhook secret", required: false, type: "secret" },
+      {
+        key: "MOYASAR_WEBHOOK_SECRET",
+        label: "Moyasar webhook secret token",
+        required: true,
+        type: "secret",
+        hint: "Must equal the secret token set on the Moyasar webhook — every delivery is refused (503) while unset"
+      },
       {
         key: "NEXT_PUBLIC_MOYASAR_PUBLIC_KEY",
         label: "Moyasar public key (client checkout)",
@@ -162,9 +208,21 @@ export const SECRET_GROUPS: SecretGroupDef[] = [
     title: "Voice agent",
     description: "Telephony and realtime bridge",
     fields: [
-      { key: "VOICE_BRIDGE_SECRET", label: "Voice bridge secret", required: true, type: "secret" },
+      {
+        key: "VOICE_BRIDGE_SECRET",
+        label: "Voice bridge secret",
+        required: true,
+        type: "secret",
+        hint: "Bearer token the telephony bridge sends to /api/voice/webhook (503 while unset)"
+      },
       { key: "TWILIO_ACCOUNT_SID", label: "Twilio account SID", required: false, type: "text" },
-      { key: "TWILIO_AUTH_TOKEN", label: "Twilio auth token", required: false, type: "secret" },
+      {
+        key: "TWILIO_AUTH_TOKEN",
+        label: "Twilio auth token",
+        required: false,
+        type: "secret",
+        hint: "Also verifies X-Twilio-Signature on /api/voice/twilio/inbound — calls are refused while unset"
+      },
       { key: "VOICE_BRIDGE_WS_URL", label: "Realtime media stream URL", required: false, type: "url" }
     ]
   },

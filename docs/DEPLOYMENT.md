@@ -89,16 +89,30 @@ bash scripts/hostinger-post-deploy.sh
 
 ### 1.4 Webhook URLs (after deploy)
 
-| Service | URL |
-|---------|-----|
-| Moyasar | `https://arabclue.com/api/billing/webhook` |
-| Salla OAuth | `https://arabclue.com/api/salla/oauth/callback` |
-| Salla webhooks | `https://arabclue.com/api/salla/webhook` |
-| Meta (IG / WhatsApp) | `https://arabclue.com/api/meta/webhook` |
-| AI employee WhatsApp (per hire) | `https://arabclue.com/api/employees/webhooks/whatsapp/{employeeId}` |
-| AI employee Telegram (per hire) | `https://arabclue.com/api/employees/webhooks/telegram/{employeeId}` |
-| AI employee Slack (per hire) | `https://arabclue.com/api/employees/webhooks/slack/{employeeId}` |
-| Twilio voice | `https://arabclue.com/api/voice/twilio/inbound` |
+| Service | URL | Authenticated by |
+|---------|-----|------------------|
+| Moyasar | `https://arabclue.com/api/billing/webhook` | `secret_token` in the body = `MOYASAR_WEBHOOK_SECRET` |
+| Salla OAuth | `https://arabclue.com/api/salla/oauth/callback` | signed OAuth state |
+| Salla webhooks | `https://arabclue.com/api/salla/webhook` | `SALLA_WEBHOOK_SECRET` |
+| Meta (IG / WhatsApp, platform app) | `https://arabclue.com/api/meta/webhook` | `X-Hub-Signature-256` with `META_APP_SECRET` |
+| AI employee WhatsApp (per hire) | `https://arabclue.com/api/employees/webhooks/whatsapp/{employeeId}` | `X-Hub-Signature-256` with the integration's `app_secret` |
+| AI employee Messenger + Instagram (per hire) | `https://arabclue.com/api/employees/webhooks/meta/{employeeId}` | `X-Hub-Signature-256` with the integration's `app_secret` |
+| AI employee Telegram (per hire) | `https://arabclue.com/api/employees/webhooks/telegram/{employeeId}` | secret registered with the bot |
+| AI employee Slack (per hire) | `https://arabclue.com/api/employees/webhooks/slack/{employeeId}` | `X-Slack-Signature` (integration `signing_secret` / `SLACK_SIGNING_SECRET`) |
+| AI employee SMS (per hire) | `https://arabclue.com/api/employees/webhooks/sms/{employeeId}` | `X-Twilio-Signature` with the integration's Auth Token |
+| Twilio voice | `https://arabclue.com/api/voice/twilio/inbound` | `X-Twilio-Signature` with `TWILIO_AUTH_TOKEN` |
+| Voice bridge tool calls | `https://arabclue.com/api/voice/webhook` | `Authorization: Bearer $VOICE_BRIDGE_SECRET` |
+
+The Meta row is the **platform** app's callback (comment handover). AI-employee Messenger /
+Instagram DMs arrive at the per-hire URL from the merchant's own Meta app (setup:
+`docs/SETUP.md` §7.2). Every webhook fails closed: while its secret is unset it answers **503**
+and processes nothing, so set `MOYASAR_WEBHOOK_SECRET`, `META_APP_SECRET`, `TWILIO_AUTH_TOKEN`
+and `VOICE_BRIDGE_SECRET` (Admin → Config) before pointing providers at production. Telegram
+webhooks are registered at `NEXT_PUBLIC_SITE_URL`.
+
+Long AI turns run after the webhook is acknowledged (`after()` from `next/server`). On Hostinger
+(`next start`) that work finishes in the same process — stop the app with `SIGTERM`/`SIGINT` and
+let it exit rather than killing it, or in-flight replies are lost.
 
 **Health check:** `GET https://arabclue.com/api/health` — public liveness + database reachability (`{ ok, timestamp }`, cached 30 s, rate-limited). Operators get the detailed report (Supabase, Moyasar, OpenAI reachability + git SHA) with `Authorization: Bearer $CRON_SECRET` (or `x-cron-secret`) or a platform-admin session.
 
