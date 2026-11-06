@@ -29,7 +29,12 @@ export const EmployeeConfigSchema = z
     persona_city: line(64).optional(),
     persona_dialect: line(32).optional(),
     persona_voice: line(32).optional(),
-    persona_background: z.string().trim().max(500).optional(),
+    persona_background: z
+      .string()
+      .trim()
+      .max(500)
+      .refine((v) => !v.includes("\0"), "must not contain NUL characters")
+      .optional(),
     persona_signature: line(80).optional()
   })
   .strict()

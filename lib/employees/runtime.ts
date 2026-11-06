@@ -18,12 +18,18 @@
  *     of another employee — or another merchant — is "not found".
  *   • Nothing runs for an employee whose merchant lacks the AI-employees entitlement, whose
  *     seat is unpaid, or that is not active (SW-18, F10 — lib/employees/gates.ts).
- *   • Every merchant-editable field is clamped before it reaches a model (SW-20).
+ *   • Every merchant-editable field is clamped before it reaches a model (SW-20): the persona
+ *     and knowledge fields, every transcript message and the transcript as a whole, and a
+ *     task's title and description (RE-1 — the owner can write messages and tasks through
+ *     the Data API).
  *   • The tick only marks a task done after a real action succeeded (SW-5).
+ *   • A message sent on the merchant's behalf is stored in the recipient's own conversation,
+ *     and a follow-up is not sent into a conversation a human has taken over (RE-4).
  */
 
 import { aiText } from "@/lib/ai/providers";
 import { getServiceSupabase } from "@/lib/db/supabase";
+import { reportError } from "@/lib/observability/error-reporter";
 import { getRole } from "./catalog";
 import type {
   AIConversationRow,
@@ -42,7 +48,10 @@ import { markIntegrationError } from "./integration-store";
 import type { IntegrationErrorReason } from "./integration-errors";
 import { employeeRunGate, GATE_MERCHANT_COLUMNS, type EmployeeGateReason, type GateMerchant } from "./gates";
 import { normalizeRecipient } from "./recipients";
+import { isRecipientConversation, recipientConversation } from "./recipient-conversation";
+import { HUMAN_TAKEOVER_STATUSES } from "./conversation-status";
 import { sendThroughIntegration } from "./send";
+import { MESSAGE_CONTENT_MAX_CHARS, PROMPT_TEXT_LIMITS, truncateText } from "./text-bounds";
 
 const MAX_CONTEXT_TURNS = 20;
 
@@ -166,7 +175,8 @@ async function persistMessage(args: {
     .insert({
       conversation_id: args.conversationId,
       role: args.role,
-      content: args.content,
+      // Within the ai_employee_messages_content_size bound, so a store never fails on size.
+      content: truncateText(args.content, MESSAGE_CONTENT_MAX_CHARS),
       tokens: args.tokens ?? null,
       latency_ms: args.latencyMs ?? null,
       tool_name: args.toolName ?? null,
@@ -355,11 +365,30 @@ export class ConversationNotFoundError extends Error {
   }
 }
 
-function transcriptOf(messages: AIMessageRow[], origin: TurnOrigin): string {
+const OMITTED_HISTORY = "(earlier messages omitted)";
+
+/**
+ * The conversation history as the model sees it (RE-1): every message cut to
+ * PROMPT_TEXT_LIMITS.message, and the whole transcript to PROMPT_TEXT_LIMITS.transcript by
+ * dropping the oldest messages. Stored messages can be far larger (the owner can write them
+ * through the Data API), and the transcript goes to both the tool router and the reply.
+ */
+export function transcriptOf(messages: AIMessageRow[], origin: TurnOrigin): string {
   const speaker = origin === "inbound_channel" ? "Customer" : "Owner";
-  return messages
-    .map((m) => `${m.role === "user" ? speaker : m.role === "assistant" ? "You" : m.role}: ${m.content}`)
-    .join("\n");
+  const budget = PROMPT_TEXT_LIMITS.transcript - OMITTED_HISTORY.length - 1;
+  const lines: string[] = [];
+  let used = 0;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    const label = m.role === "user" ? speaker : m.role === "assistant" ? "You" : m.role;
+    const content = typeof m.content === "string" ? m.content : "";
+    const line = `${label}: ${truncateText(content, PROMPT_TEXT_LIMITS.message)}`;
+    if (used + line.length + 1 > budget) break;
+    lines.push(line);
+    used += line.length + 1;
+  }
+  if (lines.length < messages.length) lines.push(OMITTED_HISTORY);
+  return lines.reverse().join("\n");
 }
 
 export async function respond(input: RespondInput): Promise<RespondResult> {
@@ -531,10 +560,11 @@ export type TickResult = {
   blocked?: number;
 };
 
+/** `conversationId`: the conversation the task turned out to belong to (stored on the task). */
 type TaskOutcome =
-  | { status: "done"; result: Record<string, unknown> }
+  | { status: "done"; result: Record<string, unknown>; conversationId?: string }
   | { status: "blocked"; result: Record<string, unknown> }
-  | { status: "handed_over"; note: string }
+  | { status: "handed_over"; note: string; conversationId?: string }
   | { status: "deferred"; reason: string };
 
 /** Take the task for this tick (todo, or in_progress left behind by a crashed tick). */
@@ -573,18 +603,24 @@ async function runFollowup(
   const to = normalizeRecipient(channel, rawTo);
   if (!to) return { status: "blocked", result: { error: `"${rawTo.slice(0, 64)}" is not a valid ${channel} recipient` } };
 
-  let conversation: AIConversationRow | null = null;
-  if (task.conversation_id) conversation = (await loadConversation(emp.id, task.conversation_id)).conv;
-  if (p.origin === "inbound_channel") {
+  const stored = task.conversation_id ? (await loadConversation(emp.id, task.conversation_id)).conv : null;
+  let thread: AIConversationRow;
+  if (stored && isRecipientConversation(stored, channel, to)) {
+    thread = stored;
+  } else if (p.origin === "inbound_channel") {
     // A customer's follow-up only ever goes back into that customer's own conversation.
-    const same =
-      conversation &&
-      conversation.channel === channel &&
-      normalizeRecipient(channel, conversation.external_id ?? "") === to;
-    if (!same) return { status: "blocked", result: { error: "follow-up recipient does not match its conversation" } };
+    return { status: "blocked", result: { error: "follow-up recipient does not match its conversation" } };
+  } else {
+    // RE-4: the merchant's follow-up belongs to the recipient's thread — never the dashboard
+    // thread it was scheduled from (tasks scheduled before this fix point there).
+    thread = await recipientConversation(emp.id, channel, to);
   }
-  if (conversation && HUMAN_TAKEOVER_STATUSES.has(conversation.status)) {
-    return { status: "handed_over", note: "The conversation is with your team now, so the employee did not send this follow-up." };
+  if (HUMAN_TAKEOVER_STATUSES.has(thread.status)) {
+    return {
+      status: "handed_over",
+      note: "The conversation is with your team now, so the employee did not send this follow-up.",
+      conversationId: thread.id
+    };
   }
   if (!integrations.some((i) => i.kind === channel)) {
     return { status: "blocked", result: { error: `${channel} is not connected` } };
@@ -592,13 +628,23 @@ async function runFollowup(
   const { underToolSendBudget } = await import("./tools");
   if (!(await underToolSendBudget(emp.id))) return { status: "deferred", reason: "hourly send limit reached" };
 
+  let remoteId: string;
   try {
-    const { remoteId } = await sendOnChannel({ employeeId: emp.id, kind: channel, to, body, subject: str(p.subject) ?? undefined, integrations });
-    if (conversation) await persistMessage({ conversationId: conversation.id, role: "assistant", content: body });
-    return { status: "done", result: { sent: { channel, to, remote_id: remoteId, at: new Date().toISOString() } } };
+    ({ remoteId } = await sendOnChannel({ employeeId: emp.id, kind: channel, to, body, subject: str(p.subject) ?? undefined, integrations }));
   } catch (err) {
     return { status: "blocked", result: { error: `send failed: ${errorMessage(err, 200)}` } };
   }
+  // Sent: the task is done even if storing the copy fails (a retry would send it twice).
+  try {
+    await persistMessage({ conversationId: thread.id, role: "assistant", content: body });
+  } catch (err) {
+    reportError(err, { merchantId: emp.merchant_id, extra: { step: "followup_store", employeeId: emp.id, taskId: task.id } });
+  }
+  return {
+    status: "done",
+    result: { sent: { channel, to, remote_id: remoteId, at: new Date().toISOString() } },
+    conversationId: thread.id
+  };
 }
 
 /** A free-form task the merchant (or the model on a merchant turn) wrote: one concrete action, or hand it over. */
@@ -610,16 +656,23 @@ async function runAgentTask(
   if ((task.payload ?? {}).origin === "inbound_channel") {
     return { status: "handed_over", note: "Customers cannot assign work to the employee; this needs you." };
   }
-  // Only text the merchant typed can name a new recipient (tasks the model wrote cannot).
-  const authoredText = task.source === "user" ? `${task.title}\n${task.description ?? ""}` : "";
+  // RE-1: the title and description reach the model at their API sizes, whatever is stored.
+  const title = truncateText(typeof task.title === "string" ? task.title : "", PROMPT_TEXT_LIMITS.task_title);
+  const description = truncateText(
+    typeof task.description === "string" ? task.description : "",
+    PROMPT_TEXT_LIMITS.task_description
+  );
+  // Only text the merchant typed can name a new recipient (tasks the model wrote cannot) —
+  // and only the part of it the model was shown.
+  const authoredText = task.source === "user" ? `${title}\n${description}` : "";
   const system = buildSystemPrompt(emp, integrations);
   const { decideTool, executeTool } = await import("./tools");
   const decision = await decideTool({
     systemPrompt: system,
     transcript: "",
     userMessage: [
-      `Task: ${task.title}`,
-      task.description ? `Details: ${task.description}` : "",
+      `Task: ${title}`,
+      description ? `Details: ${description}` : "",
       `Priority: ${task.priority}`,
       `Choose the single concrete action that completes this task now. If no available tool can complete it, set use_tool=false and explain in reasoning what the owner needs to do.`
     ]
@@ -692,12 +745,17 @@ export async function tick(employeeId: string): Promise<TickResult> {
       case "done": {
         await sb
           .from("ai_employee_tasks")
-          .update({ status: "done", completed_at: new Date().toISOString(), result: { ...prior, ...outcome.result } })
+          .update({
+            status: "done",
+            completed_at: new Date().toISOString(),
+            result: { ...prior, ...outcome.result },
+            ...(outcome.conversationId ? { conversation_id: outcome.conversationId } : {})
+          })
           .eq("id", task.id);
         await logAction({
           employeeId,
           action: "complete_task",
-          payload: { taskId: task.id, kind: task.kind, title: task.title },
+          payload: { taskId: task.id, kind: task.kind, title: truncateText(String(task.title ?? ""), PROMPT_TEXT_LIMITS.task_title) },
           result: outcome.result,
           status: "success"
         });
@@ -727,7 +785,8 @@ export async function tick(employeeId: string): Promise<TickResult> {
             assignee: "human",
             status: "blocked",
             started_at: null,
-            result: { ...prior, handed_over_at: new Date().toISOString(), note: outcome.note }
+            result: { ...prior, handed_over_at: new Date().toISOString(), note: outcome.note },
+            ...(outcome.conversationId ? { conversation_id: outcome.conversationId } : {})
           })
           .eq("id", task.id);
         await logAction({
@@ -799,15 +858,8 @@ async function writeHeartbeat(
 
 // ─── Webhook helper: handle an inbound message end-to-end ────────────────
 
-/**
- * Conversation states in which a human owns the thread (critic-17h): inbound
- * messages are stored for the merchant, but the AI neither answers nor sends.
- */
-export const HUMAN_TAKEOVER_STATUSES: ReadonlySet<AIConversationRow["status"]> = new Set([
-  "escalated",
-  "snoozed",
-  "closed"
-]);
+/** Defined in ./conversation-status (the tools use it too); re-exported for existing importers. */
+export { HUMAN_TAKEOVER_STATUSES };
 
 /** Why an inbound message was stored without an AI reply. */
 export type InboundStoreReason =

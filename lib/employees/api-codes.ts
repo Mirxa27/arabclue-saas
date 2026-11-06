@@ -19,6 +19,12 @@ export const EMPLOYEE_API_CODES = [
   "dpa_required",
   /** 409 — the merchant already has this role under this name. */
   "duplicate_employee",
+  /**
+   * 400 — the database refused an employee's settings (a size bound or a character it cannot
+   * store) that passed the request schema. Body adds `field` (config | knowledge | goals |
+   * display_name | language | tone) when it is known.
+   */
+  "invalid_employee_settings",
   /** 404 — no such conversation for this employee. */
   "conversation_not_found",
   /** 404 — no such integration on this employee. */
@@ -63,6 +69,10 @@ export const EMPLOYEE_API_COPY: Record<EmployeeApiCode, { ar: string; en: string
   duplicate_employee: {
     ar: "لديك موظف بنفس الدور والاسم. اختر اسمًا آخر.",
     en: "You already have an employee with this role and name. Choose another name."
+  },
+  invalid_employee_settings: {
+    ar: "بعض إعدادات الموظف أطول من المسموح أو تحتوي على رموز لا يمكن حفظها. اختصر الأهداف أو قاعدة المعرفة أو نص الشخصية ثم حاول مجددًا.",
+    en: "Some of the employee's settings are too long or contain characters that cannot be stored. Shorten the goals, knowledge base or persona text and try again."
   },
   conversation_not_found: {
     ar: "لم يُعثر على هذه المحادثة لدى هذا الموظف.",

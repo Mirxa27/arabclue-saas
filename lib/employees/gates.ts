@@ -93,10 +93,44 @@ export function runGateError(gate: Exclude<EmployeeRunGate, { ok: true }>, emp: 
   }
 }
 
+/** 402 seat_unpaid for a switch to `active`. */
+export function seatUnpaidOnResumeError(emp: Pick<SeatFields, "billing_status">, reason: SeatUnpaidReason): EmployeeApiError {
+  return new EmployeeApiError(
+    402,
+    "seat_unpaid",
+    "This employee's trial has ended or its seat is unpaid. Pay for the seat before resuming it.",
+    { billing_status: emp.billing_status, seat: reason }
+  );
+}
+
+/** 402 seat_limit for a switch to `active`. */
+export function seatLimitOnResumeError(merchant: Pick<GateMerchant, "plan">, limit: number): EmployeeApiError {
+  return new EmployeeApiError(
+    402,
+    "seat_limit",
+    `Your ${merchant.plan} plan includes up to ${limit} AI employees. Upgrade or offboard someone before resuming this one.`,
+    { limit }
+  );
+}
+
+/**
+ * The parts of F10 that need no seat count: the plan must include employees and the seat must
+ * be paid. The count is checked atomically by activate_ai_employee() (RE-3).
+ */
+export function assertCanResume(emp: SeatFields, merchant: GateMerchant, now = new Date()): void {
+  if (!merchantCanUseFeature(merchant, "employees")) {
+    throw new EmployeeApiError(402, "plan_required", featureGateMessage("employees"));
+  }
+  const seat = employeeSeatStanding(emp, now);
+  if (!seat.paid) throw seatUnpaidOnResumeError(emp, seat.reason);
+}
+
 /**
  * Refuse a switch to `active` (F10): the plan must include employees, the seat must be paid,
  * and the merchant's non-offboarded employees (this one included) must fit the plan's limit.
- * `nonOffboardedCount` must come from a successful count query — callers fail closed.
+ * `nonOffboardedCount` must come from a successful count query — callers fail closed. This is
+ * the fast path; the switch itself goes through activate_ai_employee(), which re-checks the
+ * seat and the count under the merchant lock (RE-3).
  */
 export function assertCanActivate(
   emp: SeatFields,
@@ -104,25 +138,7 @@ export function assertCanActivate(
   nonOffboardedCount: number,
   now = new Date()
 ): void {
-  if (!merchantCanUseFeature(merchant, "employees")) {
-    throw new EmployeeApiError(402, "plan_required", featureGateMessage("employees"));
-  }
-  const seat = employeeSeatStanding(emp, now);
-  if (!seat.paid) {
-    throw new EmployeeApiError(
-      402,
-      "seat_unpaid",
-      "This employee's trial has ended or its seat is unpaid. Pay for the seat before resuming it.",
-      { billing_status: emp.billing_status, seat: seat.reason }
-    );
-  }
+  assertCanResume(emp, merchant, now);
   const limit = employeeLimitForPlan(merchant.plan ?? "lite");
-  if (nonOffboardedCount > limit) {
-    throw new EmployeeApiError(
-      402,
-      "seat_limit",
-      `Your ${merchant.plan} plan includes up to ${limit} AI employees. Upgrade or offboard someone before resuming this one.`,
-      { limit }
-    );
-  }
+  if (nonOffboardedCount > limit) throw seatLimitOnResumeError(merchant, limit);
 }

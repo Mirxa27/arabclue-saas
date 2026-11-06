@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { TaskCreateSchema, TaskUpdateSchema } from "@/lib/employees/task-schemas";
 import { getServerSupabase } from "@/lib/db/supabase";
+import { taskWriteError } from "@/lib/employees/db-errors";
 import { employeeRouteError } from "@/lib/employees/http";
 import { requireOwnedEmployee } from "@/lib/employees/route-helpers";
 
@@ -24,7 +25,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
 
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }): Promise<NextResponse> {
   try {
-    const { employee } = await requireOwnedEmployee((await ctx.params).id);
+    const { merchant, employee } = await requireOwnedEmployee((await ctx.params).id);
     const body = TaskCreateSchema.parse(await req.json());
     const sb = await getServerSupabase();
     const { data, error } = await sb
@@ -43,7 +44,8 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       })
       .select("*")
       .single();
-    if (error || !data) throw new Error(error?.message ?? "Failed to create task");
+    if (error) throw taskWriteError(error, "Create task", merchant.id);
+    if (!data) throw new Error("Failed to create task");
     return NextResponse.json({ task: data });
   } catch (err) {
     return employeeRouteError(err, "POST /api/employees/:id/tasks");
@@ -52,7 +54,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
 
 export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: string }> }): Promise<NextResponse> {
   try {
-    const { employee } = await requireOwnedEmployee((await ctx.params).id);
+    const { merchant, employee } = await requireOwnedEmployee((await ctx.params).id);
     const body = TaskUpdateSchema.parse(await req.json());
     const sb = await getServerSupabase();
     const patch: Record<string, unknown> = { ...body };
@@ -66,7 +68,7 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
       .eq("employee_id", employee.id)
       .select("*")
       .maybeSingle();
-    if (error) throw new Error(error.message);
+    if (error) throw taskWriteError(error, "Update task", merchant.id);
     if (!data) return NextResponse.json({ error: "Task not found", code: "not_found" }, { status: 404 });
     return NextResponse.json({ task: data });
   } catch (err) {

@@ -4,7 +4,9 @@
  * SW-39: the seat limit is enforced atomically by hire_ai_employee() (count + insert under a
  * per-merchant row lock, service role); the JS check before it is only a fast path and a
  * failed count fails closed. SW-20: `config` is the bounded persona schema, and a catalog
- * persona is filled from the catalog on the server.
+ * persona is filled from the catalog on the server. RE-6: the field schemas stay within the
+ * ai_employees bounds, and a database refusal of the row is a 400 invalid_employee_settings
+ * (never the raw constraint text).
  */
 import { z } from "zod";
 import { HttpError } from "@/lib/api/errors";
@@ -13,20 +15,29 @@ import { getServerSupabase, getServiceSupabase } from "@/lib/db/supabase";
 import type { Merchant } from "@/lib/types/database";
 import { getRole, priceForTier, TIER_LABELS } from "./catalog";
 import { EmployeeConfigSchema, resolveEmployeeConfig } from "./config-schema";
+import { employeeWriteError } from "./db-errors";
 import { EmployeeApiError } from "./http";
-import { countSeatedEmployees, TimeZoneSchema, WorkingHoursInputSchema } from "./route-helpers";
+import {
+  AvatarSchema,
+  countSeatedEmployees,
+  DisplayNameSchema,
+  GoalsSchema,
+  KnowledgeSchema,
+  TimeZoneSchema,
+  WorkingHoursInputSchema
+} from "./route-helpers";
 import type { AIEmployeeRow } from "./types";
 
 export const HireSchema = z.object({
   role_id: z.string().min(1).max(64),
-  display_name: z.string().trim().min(2).max(64),
-  avatar: z.string().max(64).optional().nullable(),
+  display_name: DisplayNameSchema,
+  avatar: AvatarSchema.optional().nullable(),
   language: z.enum(["ar", "en", "ar-en", "khaliji", "msa"]).default("ar-en"),
   tone: z.enum(["professional", "friendly", "formal", "playful"]).default("professional"),
   timezone: TimeZoneSchema.default("Asia/Riyadh"),
   working_hours: WorkingHoursInputSchema.default({ mode: "always", start: "00:00", end: "23:59", days: [0, 1, 2, 3, 4, 5, 6] }),
-  knowledge: z.string().max(8000).optional().nullable(),
-  goals: z.array(z.string().min(1).max(200)).max(8).default([]),
+  knowledge: KnowledgeSchema.optional().nullable(),
+  goals: GoalsSchema.default([]),
   hire_plan: z.enum(["starter", "growth", "pro", "scale"]).default("starter"),
   config: EmployeeConfigSchema.optional()
 });
@@ -85,7 +96,7 @@ export async function hireEmployee(merchant: Merchant, body: HireInput): Promise
     p_limit: limit,
     p_row: row
   });
-  if (error) throw new Error(`hire failed: ${error.message}`);
+  if (error) throw employeeWriteError(error, "Hire employee", merchant.id);
   const result = data as HireOutcome | null;
   switch (result?.outcome) {
     case "hired":

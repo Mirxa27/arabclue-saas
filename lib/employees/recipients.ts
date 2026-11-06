@@ -87,8 +87,11 @@ export function namedInText(channel: IntegrationKind, to: string, authoredText: 
   }
 }
 
-/** The stored conversation external_id form of a normalised recipient. */
-function conversationExternalIds(channel: IntegrationKind, to: string): string[] {
+/**
+ * The stored conversation external_id forms of a normalised recipient. The first one is the
+ * form inbound webhooks store (WhatsApp wa_id digits, Twilio E.164 with "+", Telegram chat id…).
+ */
+export function conversationExternalIds(channel: IntegrationKind, to: string): string[] {
   if (channel === "whatsapp") return [to, `+${to}`];
   if (channel === "twilio_sms") return [to, to.replace(/^\+/, "")];
   return [to];
