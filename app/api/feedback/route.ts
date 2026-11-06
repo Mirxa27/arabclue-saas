@@ -13,7 +13,7 @@ import { FeedbackBodySchema, recordFeedback } from "@/lib/support/tickets";
 export async function POST(req: NextRequest) {
   try {
     const user = await requireUserApi();
-    const limited = await enforceRateLimit(req, "feedback:create", 20, 15 * 60_000, user.id);
+    const limited = await enforceRateLimit(req, "feedback:create", 20, 15 * 60_000, { identity: user.id });
     if (limited instanceof NextResponse) return limited;
 
     const parsed = FeedbackBodySchema.safeParse(await req.json().catch(() => null));

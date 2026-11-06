@@ -18,7 +18,7 @@ export const runtime = "nodejs";
 export async function POST(req: NextRequest) {
   try {
     const user = await requireUserApi();
-    const limited = await enforceRateLimit(req, "brand-kit:generate", 5, 10 * 60_000, user.id);
+    const limited = await enforceRateLimit(req, "brand-kit:generate", 5, 10 * 60_000, { identity: user.id });
     if (limited instanceof NextResponse) return limited;
 
     const parsed = BrandKitGenerateBodySchema.safeParse(await req.json().catch(() => null));

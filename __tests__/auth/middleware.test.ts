@@ -24,7 +24,7 @@ afterEach(() => {
 
 describe("middleware", () => {
   it("lets /auth/* and /api/auth/* through without a session or a refresh", async () => {
-    for (const path of ["/auth/callback?code=x", "/auth/confirm?token_hash=x&type=email", "/auth/session", "/api/auth/otp"]) {
+    for (const path of ["/auth/callback?code=x", "/auth/confirm?token_hash=x&type=email", "/api/auth/otp"]) {
       const res = await middleware(new NextRequest(`${SITE}${path}`));
       expect(res.headers.get("location")).toBeNull();
       expect(res.headers.get("x-middleware-next")).toBe("1");
@@ -51,6 +51,27 @@ describe("middleware", () => {
       const location = new URL(res.headers.get("location") as string);
       expect(location.origin).toBe(SITE);
       expect(location.pathname).toBe("/dashboard");
+    }
+  });
+
+  // RA-1 / RA-5: dot-segment payloads normalise to "//host" and used to become a 307 off-site.
+  it.each(["/login", "/signup"])("keeps a signed-in user on the site for dot-segment next values on %s", async (page) => {
+    getUser.mockResolvedValue({ data: { user: fakeUser() } });
+    for (const evil of [
+      "/.//evil.example/phish",
+      "/..//evil.example",
+      "/%2e//evil.example",
+      "/a/..//evil.example",
+      "/x/.././/evil",
+      "/./%2F/evil.example"
+    ]) {
+      for (const query of [`next=${encodeURIComponent(evil)}`, `next=${evil}`]) {
+        const res = await middleware(new NextRequest(`${SITE}${page}?${query}`));
+        expect(res.status).toBe(307);
+        const location = new URL(res.headers.get("location") as string);
+        expect(location.origin, `${page}?${query}`).toBe(SITE);
+        expect(location.pathname, `${page}?${query}`).toBe("/dashboard");
+      }
     }
   });
 });

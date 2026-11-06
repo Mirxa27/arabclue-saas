@@ -24,9 +24,9 @@ export async function middleware(req: NextRequest) {
 
   const { pathname, search } = req.nextUrl;
 
-  // /auth/* (code exchange, OTP verification, implicit-token rescue) and /api/auth/* create,
-  // replace or clear the session themselves and are always reachable without one. Refreshing
-  // the session here as well would race their Set-Cookie headers.
+  // /auth/* (code exchange, OTP verification) and /api/auth/* create, replace or clear the
+  // session themselves and are always reachable without one. Refreshing the session here as
+  // well would race their Set-Cookie headers.
   if (isAuthEndpointPath(pathname)) return NextResponse.next();
 
   let res = NextResponse.next({ request: req });
@@ -50,7 +50,7 @@ export async function middleware(req: NextRequest) {
   const user = data.user;
 
   const redirectTo = (path: string) => {
-    const redirect = NextResponse.redirect(new URL(path, req.url));
+    const redirect = NextResponse.redirect(sameOriginTarget(path, req.url));
     // Keep refreshed (or cleared) session cookies when we redirect instead of rendering.
     res.cookies.getAll().forEach((cookie) => redirect.cookies.set(cookie));
     return redirect;
@@ -72,6 +72,23 @@ export async function middleware(req: NextRequest) {
   }
 
   return res;
+}
+
+/**
+ * `path` resolved against the request, or DEFAULT_AFTER_LOGIN on this origin when it would
+ * leave it (or cannot be parsed). Defence in depth behind safeRedirectPath: a protocol-relative
+ * value such as "//evil.example" must never become an off-site Location from a sign-in URL.
+ * Compares with the request's own origin (not req.nextUrl, which rewrites 127.0.0.1 to localhost).
+ */
+function sameOriginTarget(path: string, requestUrl: string): URL {
+  const base = new URL(requestUrl);
+  try {
+    const target = new URL(path, base);
+    if (target.origin === base.origin) return target;
+  } catch {
+    /* unparsable target → default below */
+  }
+  return new URL(DEFAULT_AFTER_LOGIN, base);
 }
 
 export const config = {

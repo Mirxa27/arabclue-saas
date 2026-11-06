@@ -9,16 +9,18 @@
  *
  * The client sends an optional relative `next` path; it is validated here and is the only
  * part of the redirect the client controls. Responses carry a stable `code` the login page
- * maps to fixed Arabic + English text.
+ * maps to fixed Arabic + English text (`cross_site` when the same-origin check fails).
+ * Requests are capped per client IP and per address (lib/auth/sign-in-limits.ts).
  */
 import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 import { createRouteHandlerSupabase } from "@/lib/db/supabase";
 import { readTextBody } from "@/lib/http/raw-body";
-import { enforceRateLimit } from "@/lib/security/rate-limit";
-import { isSameOriginRequest } from "@/lib/security/same-origin";
+import { describeOriginCheck, isSameOriginRequest } from "@/lib/security/same-origin";
 import { reportError } from "@/lib/observability/error-reporter";
 import { DEFAULT_AFTER_LOGIN, DEFAULT_AFTER_SIGNUP, safeRedirectPath } from "@/lib/auth/redirect";
+import { siteOrigin } from "@/lib/auth/site-origin";
+import { SIGN_IN_LIMITS, limitSignInByEmail, limitSignInByIp } from "@/lib/auth/sign-in-limits";
 import { loginErrorFromAuthError, LOGIN_ERROR_MESSAGES, type LoginErrorCode } from "@/lib/auth/login-errors";
 
 const MAX_BODY_BYTES = 8_192;
@@ -48,19 +50,6 @@ const STATUS_FOR: Partial<Record<LoginErrorCode, number>> = {
   auth_unavailable: 503
 };
 
-/** Public origin for links in emails: NEXT_PUBLIC_SITE_URL, else the request's origin. */
-export function siteOrigin(req: NextRequest): string {
-  const configured = process.env.NEXT_PUBLIC_SITE_URL?.trim();
-  if (configured) {
-    try {
-      return new URL(configured).origin;
-    } catch {
-      /* fall back to the request origin */
-    }
-  }
-  return req.nextUrl.origin;
-}
-
 /** `${origin}/auth/callback?next=<safe path>` — the URL Supabase redirects PKCE links to. */
 export function emailRedirectUrl(origin: string, mode: OtpRequest["mode"], next: string | undefined): string {
   const target = safeRedirectPath(next) ?? (mode === "signup" ? DEFAULT_AFTER_SIGNUP : DEFAULT_AFTER_LOGIN);
@@ -70,8 +59,14 @@ export function emailRedirectUrl(origin: string, mode: OtpRequest["mode"], next:
 export async function requestEmailOtp(req: NextRequest, route: string): Promise<NextResponse> {
   // Only our own pages call this (fetch, JSON). A cross-site form post could otherwise plant
   // a PKCE code verifier for someone else's sign-in in the visitor's browser (login CSRF).
+  // Reported with what the check saw: on a misconfigured proxy every sign-in lands here.
   if (!isSameOriginRequest(req)) {
-    return NextResponse.json({ error: "Cross-site request rejected", code: "unknown" }, { status: 403 });
+    reportError(new Error("Sign-in request rejected by the same-origin check"), {
+      route,
+      status: 403,
+      extra: describeOriginCheck(req)
+    });
+    return otpError(403, "cross_site");
   }
   if (!(req.headers.get("content-type") ?? "").toLowerCase().startsWith("application/json")) {
     return NextResponse.json({ error: "Expected application/json", code: "unknown" }, { status: 415 });
@@ -94,15 +89,16 @@ export async function requestEmailOtp(req: NextRequest, route: string): Promise<
   const body = parsed.data;
   const email = body.email.toLowerCase();
 
-  // Per client (real IP, see clientIp) + address. No address-only bucket: anyone could fill
-  // it and lock the owner out; Supabase already enforces a per-address send interval.
-  const limited = await enforceRateLimit(req, `auth:otp:${body.mode}`, 5, 15 * 60_000, email);
-  if (limited instanceof NextResponse) return limited;
+  // Per client (trusted IP, see clientIp) across all addresses, then per address across all
+  // clients — see lib/auth/sign-in-limits.ts.
+  const limited =
+    (await limitSignInByIp(req, "auth:otp:ip", SIGN_IN_LIMITS.otpPerIp)) ?? (await limitSignInByEmail(req, email));
+  if (limited) return limited;
 
   const client = createRouteHandlerSupabase(req);
   if (!client) return otpError(503, "auth_unavailable");
 
-  const { error } = await client.supabase.auth.signInWithOtp({
+  const { error } = await client.auth.signInWithOtp({
     email,
     options: {
       data: body.mode === "signup" && body.name ? { full_name: body.name } : undefined,

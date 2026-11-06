@@ -1,5 +1,5 @@
 import { HomeLanding } from "@/components/marketing/home-landing";
-import { ImplicitSessionRescue } from "@/components/auth/implicit-session-rescue";
+import { LegacyLinkNotice } from "@/components/auth/legacy-link-notice";
 
 type PageProps = {
   searchParams?: Promise<{
@@ -11,8 +11,9 @@ export default async function Page(props: PageProps) {
   const searchParams = await props.searchParams;
   return (
     <>
-      {/* Old implicit-flow magic links fall back to the Site URL (/#access_token=…). */}
-      <ImplicitSessionRescue />
+      {/* GoTrue falls back to the Site URL (/#access_token=… from pre-PKCE links, /#error=…):
+          the fragment is stripped and never used; the visitor is asked for a new link. */}
+      <LegacyLinkNotice />
       <HomeLanding initialLang={searchParams?.lang === "ar" ? "ar" : "en"} />
     </>
   );

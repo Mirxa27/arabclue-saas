@@ -11,8 +11,10 @@ export const LOGIN_ERROR_CODES = [
   "link_expired",
   "link_other_browser",
   "link_invalid",
+  "link_unsupported",
   "access_denied",
   "session_failed",
+  "cross_site",
   "rate_limited",
   "invalid_email",
   "signup_disabled",
@@ -38,6 +40,10 @@ export const LOGIN_ERROR_MESSAGES: Record<LoginErrorCode, BilingualText> = {
     ar: "رابط الدخول غير صالح. اطلب رابطًا جديدًا.",
     en: "This sign-in link is not valid. Request a new one."
   },
+  link_unsupported: {
+    ar: "صيغة رابط الدخول هذه لم تعد مدعومة. اطلب رابط دخول جديدًا.",
+    en: "This sign-in link format is no longer supported. Request a new sign-in link."
+  },
   access_denied: {
     ar: "أُلغي تسجيل الدخول أو رُفض.",
     en: "Sign-in was cancelled or denied."
@@ -45,6 +51,10 @@ export const LOGIN_ERROR_MESSAGES: Record<LoginErrorCode, BilingualText> = {
   session_failed: {
     ar: "تعذّر إكمال تسجيل الدخول من هذا الرابط. اطلب رابطًا جديدًا.",
     en: "We couldn't finish signing you in from that link. Request a new one."
+  },
+  cross_site: {
+    ar: "تعذّر التحقق من أن الطلب صادر من صفحة الدخول في arabclue. أعد تحميل الصفحة وحاول مرة أخرى.",
+    en: "We couldn't verify this request came from the arabclue sign-in page. Reload the page and try again."
   },
   rate_limited: {
     ar: "محاولات كثيرة خلال وقت قصير. انتظر قليلًا ثم حاول مرة أخرى.",

@@ -48,8 +48,9 @@ Minimum bootstrap for first boot:
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | hPanel (bootstrap) |
 | `SUPABASE_SERVICE_ROLE_KEY` | hPanel (bootstrap) |
 | `TOKEN_ENCRYPTION_KEY` | hPanel (bootstrap — encrypts admin-saved secrets) |
+| `NEXT_PUBLIC_SITE_URL` | hPanel (bootstrap — set before `npm run build`: Next inlines `NEXT_PUBLIC_*` values at build time, in server code too, so change it here and rebuild. Sign-in links and the same-origin check use it) |
+| `SUPABASE_SECRET_KEY` | hPanel (optional — `sb_secret_…`, sign-in IP forwarding, see §1.7) |
 | `PLATFORM_ADMIN_EMAILS` | Admin → Config (or hPanel) |
-| `NEXT_PUBLIC_SITE_URL` | Admin → Config |
 | `OPENAI_API_KEY`, `MOYASAR_*`, `SALLA_*`, OAuth apps, etc. | Admin → Config |
 | `CRON_SECRET` | Admin → Config |
 | `NEXT_PUBLIC_SALLA_INSTALL_URL` | Admin → Config → Salla (dashboard "Connect Salla" in Easy Mode reads it at runtime; marketing CTAs need a rebuild) |
@@ -159,14 +160,26 @@ Arabic + English email templates: [SETUP.md §3.3](./SETUP.md#33-configure-auth-
 1. **Authentication → URL Configuration** — Site URL `https://arabclue.com` (same as
    `NEXT_PUBLIC_SITE_URL`); Redirect URLs `https://arabclue.com/auth/callback**` and
    `https://arabclue.com/auth/confirm**`.
-2. **Authentication → Email Templates** — Magic Link and Confirm signup link to
-   `{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=email&next=…`, so links work even
-   when a phone opens them in the mail app's browser.
-3. Configure custom SMTP (§3) — Supabase's built-in mailer is heavily rate-limited.
+2. **Authentication → Email Templates** — Magic Link links to
+   `{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=email&next=/dashboard&redirect_to={{ .RedirectTo }}`
+   (`redirect_to` last: it brings the user back to the page or "Connect" button they started from);
+   Confirm signup to `…&type=email&next=/welcome`; Invite user to `…&type=invite&next=/welcome`.
+   Links then work even when a phone opens them in the mail app's browser. Old implicit-flow links
+   (`#access_token=…`) are refused on purpose — see SETUP.md §3.3.
+3. Configure custom SMTP (§3) — Supabase's built-in mailer is heavily rate-limited — and size
+   **Authentication → Rate Limits → emails sent** for your traffic.
+4. **Per-visitor sign-in limits** (recommended on Hostinger, where every sign-in leaves from one
+   server IP): set `SUPABASE_SECRET_KEY` (`sb_secret_…`) in hPanel and enable **Authentication →
+   Rate Limits → IP address forwarding**. Sign-in then sends each visitor's IP (from
+   `TRUSTED_PROXY_HOPS`, §1.8) as `sb-forwarded-for`; without it, one client hammering sign-in can
+   use up Supabase's per-IP budget for everyone. The app also caps link requests per IP and per
+   address, and verifications per IP.
 
 Smoke test after deploy: request a link on `/login`, open it, and confirm you land on `/dashboard`
 (or `/welcome` for a new address). A broken link must end on `/login?error=…` with a readable
-message, never a 500.
+message, never a 500. If every request fails with "We couldn't verify this request came from the
+arabclue sign-in page" (`code: "cross_site"`, logged with the origin it saw), the proxy is not
+forwarding the public `Host` / `X-Forwarded-Host` — fix that or set `NEXT_PUBLIC_SITE_URL`.
 
 `/auth/*` and `/api/auth/*` are public routes (the middleware does not gate or refresh them). OAuth
 **start** links (`/api/oauth/*/start`, `/api/employees/:id/oauth/:kind/start`) send signed-out
@@ -189,7 +202,9 @@ outermost trusted proxy — then falls back to `X-Real-IP`, then `unknown`.
 | Node exposed directly, no proxy (not recommended) | `0` — forwarding headers ignored; IP-keyed limits become shared by all clients |
 
 IPv6 clients are bucketed per `/64`. Limits on authenticated routes can key on the user or
-merchant id instead of the IP (`enforceRateLimit(req, scope, limit, windowMs, { identity })`).
+merchant id instead of the IP (`enforceRateLimit(req, scope, limit, windowMs, { identity })`);
+brand-kit generation, support tickets, feedback and onboarding do, so rotating IPs does not reset
+a user's budget.
 
 ---
 

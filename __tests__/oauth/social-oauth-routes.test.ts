@@ -261,11 +261,49 @@ describe("OAuth callbacks", () => {
     res = await callback(linkedinCallback, "/api/oauth/linkedin/callback", { code: "c", state: flow.state }, flow.cookie);
     expect(res.headers.get("location")).toContain("error=account_lookup_failed");
 
-    db.results.social_channels = { error: { code: "23505", message: leaky } };
+    db.results.social_channels = { error: { code: "XX000", message: leaky } };
     flow = await linkedinRoundTrip();
     res = await callback(linkedinCallback, "/api/oauth/linkedin/callback", { code: "c", state: flow.state }, flow.cookie);
-    expect(res.headers.get("location")).toContain("error=save_failed");
+    expect(res.headers.get("location")).toBe("/integrations/callback?platform=linkedin&status=error&error=save_failed");
     expect(res.headers.get("location")).not.toContain("duplicate");
+  });
+
+  // RA-8 / RA-13: an account already connected to another store (social_channels_platform_external_id_key)
+  // used to come back as save_failed ("try again"), which can never succeed.
+  it("report a provider account linked to another store as channel_already_connected (LinkedIn, X, Instagram)", async () => {
+    const duplicate = {
+      code: "23505",
+      message: 'duplicate key value violates unique constraint "social_channels_platform_external_id_key"'
+    };
+    db.results.social_channels = { error: duplicate };
+
+    const li = await linkedinRoundTrip();
+    const liRes = await callback(linkedinCallback, "/api/oauth/linkedin/callback", { code: "c", state: li.state }, li.cookie);
+    expect(liRes.headers.get("location")).toBe("/integrations/callback?platform=linkedin&status=error&error=channel_already_connected");
+    expect(liRes.headers.get("location")).not.toContain("duplicate");
+    // Still logged server-side, under the right code.
+    expect(reportError).toHaveBeenLastCalledWith(
+      expect.objectContaining({ code: "channel_already_connected" }),
+      expect.objectContaining({ extra: expect.objectContaining({ code: "channel_already_connected" }) })
+    );
+    expect(providers.updateAgentStatus).not.toHaveBeenCalled();
+
+    providers.exchangeXCode.mockResolvedValue({ access_token: "x-access", expires_in: 7200 });
+    providers.resolveXUserId.mockResolvedValue("x-user-taken");
+    const x = await start(xStart, "/api/oauth/x/start");
+    const xRes = await callback(xCallback, "/api/oauth/x/callback", { code: "xc", state: x.state }, `ac_oauth_x=${x.cookies.get("ac_oauth_x")?.value}`);
+    expect(xRes.headers.get("location")).toBe("/integrations/callback?platform=x&status=error&error=channel_already_connected");
+
+    providers.exchangeMetaCode.mockResolvedValue({ accessToken: "meta-access", expiresIn: 5000 });
+    providers.resolveInstagramAccount.mockResolvedValue({ igUserId: "ig-taken", pageId: "page-1" });
+    const ig = await start(metaStart, "/api/oauth/meta/start?target=instagram");
+    const igRes = await callback(
+      metaCallback,
+      "/api/oauth/meta/callback",
+      { code: "mc", state: ig.state },
+      `ac_oauth_meta=${ig.cookies.get("ac_oauth_meta")?.value}`
+    );
+    expect(igRes.headers.get("location")).toBe("/integrations/callback?platform=instagram&status=error&error=channel_already_connected");
   });
 
   it("refuse a state minted for another platform", async () => {

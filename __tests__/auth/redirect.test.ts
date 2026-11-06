@@ -1,5 +1,23 @@
 import { describe, expect, it } from "vitest";
 import { loginPath, safeRedirectPath } from "@/lib/auth/redirect";
+import { relativeRedirect } from "@/lib/http/redirect";
+
+/** RA-1 / RA-5: inputs whose *normalised* form (dot segments removed) is protocol-relative. */
+const DOT_SEGMENT_OFFSITE = [
+  "/.//evil.example/x",
+  "/.//other.example/x",
+  "/%2e//evil.example",
+  "/%2E//evil.example",
+  "/..//evil.example",
+  "/%2e%2e//evil.example",
+  "/a/..//evil.example",
+  "/a/%2e%2e//evil.example",
+  "/x/.././/evil",
+  "/x/.././/evil.example/phish?x=1#h",
+  "/./%2F/evil.example",
+  "/./%2f/evil.example",
+  "/.//evil.example/phish"
+];
 
 describe("safeRedirectPath", () => {
   it("keeps same-origin paths with query and hash", () => {
@@ -41,6 +59,36 @@ describe("safeRedirectPath", () => {
     ["empty", ""]
   ])("rejects %s", (_label, value) => {
     expect(safeRedirectPath(value)).toBeNull();
+  });
+
+  it.each(DOT_SEGMENT_OFFSITE)("rejects %s, whose normalised form would be protocol-relative", (value) => {
+    expect(safeRedirectPath(value)).toBeNull();
+  });
+
+  it("only ever returns values that resolve on the current origin and that relativeRedirect accepts", () => {
+    // Every combination of a dot-segment / encoded prefix, a separator and a host-looking tail.
+    const prefixes = ["", "/", "/.", "/./", "/..", "/../", "/a/..", "/a/../", "/%2e", "/%2e/", "/%2E%2E", "/%2e%2e/", "/x/./", "/x/.././"];
+    const separators = ["/", "//", "/%2F", "%2F", "%2F%2F", "/%5C", "\\", "/./", "/%2e/", "//./", "/.%2F/"];
+    const tails = ["evil.example/x", "evil.example", "evil.example?q=1#h", "dashboard"];
+    const base = "https://arabclue.example";
+    let accepted = 0;
+    for (const prefix of prefixes) {
+      for (const sep of separators) {
+        for (const tail of tails) {
+          const input = `${prefix}${sep}${tail}`;
+          const out = safeRedirectPath(input);
+          if (out === null) continue;
+          accepted += 1;
+          expect(out.startsWith("/") && !out.startsWith("//"), `${input} → ${out}`).toBe(true);
+          expect(new URL(out, base).origin, `${input} → ${out}`).toBe(base);
+          // The value is safe to hand to a redirect after a token was consumed: it never throws.
+          expect(() => relativeRedirect(out), `${input} → ${out}`).not.toThrow();
+          // …and no decoding layer turns it into a protocol-relative reference either.
+          expect(decodeURIComponent(out).startsWith("//"), `${input} → ${out}`).toBe(false);
+        }
+      }
+    }
+    expect(accepted).toBeGreaterThan(0); // sanity: ordinary paths like "/./dashboard" still pass
   });
 
   it("rejects null, undefined and oversized values", () => {

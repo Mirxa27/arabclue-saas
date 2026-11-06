@@ -20,6 +20,7 @@ import {
 
 vi.mock("@/lib/observability/error-reporter", () => ({ reportError: vi.fn() }));
 
+import { reportError } from "@/lib/observability/error-reporter";
 import { POST as otpPost } from "@/app/api/auth/otp/route";
 import { GET as callbackGet } from "@/app/auth/callback/route";
 import { GET as confirmGet } from "@/app/auth/confirm/route";
@@ -119,18 +120,139 @@ describe("POST /api/auth/otp", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it("rate-limits per client + address, keyed on the proxy-appended IP (spoofed XFF entries don't help)", async () => {
-    stubGoTrue({ "POST /auth/v1/otp": () => json(200, {}) });
-    const email = uniqueEmail();
-    for (let i = 0; i < 5; i++) {
-      const ok = await otpPost(otpRequest({ email }, { "x-forwarded-for": `10.9.9.${i}, 203.0.113.77` }));
+  // RA-4: one client used to get a fresh budget for every new address (key = IP + email).
+  it("caps sign-in emails per client IP across addresses, keyed on the proxy-appended IP (spoofed XFF entries don't help)", async () => {
+    const calls = stubGoTrue({ "POST /auth/v1/otp": () => json(200, {}) });
+    for (let i = 0; i < 20; i++) {
+      const ok = await otpPost(otpRequest({ email: uniqueEmail() }, { "x-forwarded-for": `10.9.9.${i}, 203.0.113.77` }));
       expect(ok.status).toBe(200);
     }
-    const limited = await otpPost(otpRequest({ email }, { "x-forwarded-for": "10.9.9.99, 203.0.113.77" }));
+    const limited = await otpPost(otpRequest({ email: uniqueEmail() }, { "x-forwarded-for": "10.9.9.99, 203.0.113.77" }));
     expect(limited.status).toBe(429);
     expect(((await limited.json()) as { code: string }).code).toBe("rate_limited");
-    // Another address from the same client is a separate budget.
-    expect((await otpPost(otpRequest({ email: uniqueEmail() }, { "x-forwarded-for": "203.0.113.77" }))).status).toBe(200);
+    expect(calls).toHaveLength(20);
+    // Another client is a separate budget.
+    expect((await otpPost(otpRequest({ email: uniqueEmail() }, { "x-forwarded-for": "203.0.113.78" }))).status).toBe(200);
+  });
+
+  // RA-4: one address could be sent unlimited sign-in emails by rotating clients.
+  it("caps sign-in emails per normalised address, whichever client asks", async () => {
+    const calls = stubGoTrue({ "POST /auth/v1/otp": () => json(200, {}) });
+    const local = `victim${Date.now()}${Math.random().toString(16).slice(2)}`;
+    const variants = [`${local}@example.com`, ` ${local.toUpperCase()}@Example.com `, `${local}+promo@example.com`];
+    for (const email of variants) {
+      expect((await otpPost(otpRequest({ email, mode: "login" }))).status).toBe(200);
+    }
+    // 4th request for the same inbox, from yet another IP and in the other mode: refused before Supabase.
+    const limited = await otpPost(otpRequest({ email: `${local}+other@example.com`, mode: "signup", name: "X" }));
+    expect(limited.status).toBe(429);
+    expect(((await limited.json()) as { code: string }).code).toBe("rate_limited");
+    expect(calls).toHaveLength(3);
+    // A different address is unaffected.
+    expect((await otpPost(otpRequest({ email: uniqueEmail() }))).status).toBe(200);
+  });
+
+  it("treats Gmail dot and googlemail variants as the same inbox for the per-address cap", async () => {
+    stubGoTrue({ "POST /auth/v1/otp": () => json(200, {}) });
+    const local = `gm${Date.now()}${Math.random().toString(16).slice(2, 8)}`;
+    const dotted = `${local.slice(0, 3)}.${local.slice(3)}`;
+    for (const email of [`${local}@gmail.com`, `${dotted}@gmail.com`, `${local}@googlemail.com`]) {
+      expect((await otpPost(otpRequest({ email }))).status).toBe(200);
+    }
+    expect((await otpPost(otpRequest({ email: `${dotted}+x@googlemail.com` }))).status).toBe(429);
+  });
+
+  describe("Supabase IP forwarding (SUPABASE_SECRET_KEY)", () => {
+    it("sends the secret key and the trusted client IP as sb-forwarded-for when configured", async () => {
+      vi.stubEnv("SUPABASE_SECRET_KEY", "sb_secret_test_forwarding_key");
+      const calls = stubGoTrue({ "POST /auth/v1/otp": () => json(200, {}) });
+      const res = await otpPost(otpRequest({ email: uniqueEmail() }, { "x-forwarded-for": "6.6.6.6, 203.0.113.91" }));
+      expect(res.status).toBe(200);
+      expect(calls).toHaveLength(1);
+      expect(calls[0].headers.get("apikey")).toBe("sb_secret_test_forwarding_key");
+      // The proxy-appended address, never the spoofable left-most entry.
+      expect(calls[0].headers.get("sb-forwarded-for")).toBe("203.0.113.91");
+    });
+
+    it("forwards the client IP on token-hash verification too", async () => {
+      vi.stubEnv("SUPABASE_SECRET_KEY", "sb_secret_test_forwarding_key");
+      const calls = stubGoTrue({ "POST /auth/v1/verify": () => json(200, fakeSession()) });
+      const res = await confirmGet(
+        new NextRequest(`${SITE}/auth/confirm?token_hash=th-fwd&type=email`, { headers: { "x-forwarded-for": "203.0.113.92" } })
+      );
+      expect(res.headers.get("location")).toBe("/dashboard");
+      expect(calls[0].headers.get("sb-forwarded-for")).toBe("203.0.113.92");
+      expect(calls[0].headers.get("apikey")).toBe("sb_secret_test_forwarding_key");
+    });
+
+    it("behaves as before without a usable secret key (unset, legacy JWT) or without a known client IP", async () => {
+      vi.stubEnv("SUPABASE_SECRET_KEY", "");
+      const calls = stubGoTrue({ "POST /auth/v1/otp": () => json(200, {}) });
+      await otpPost(otpRequest({ email: uniqueEmail() }));
+      vi.stubEnv("SUPABASE_SECRET_KEY", "eyJhbGciOiJIUzI1NiJ9.eyJyb2xlIjoic2VydmljZV9yb2xlIn0.c2ln");
+      await otpPost(otpRequest({ email: uniqueEmail() }));
+      for (const call of calls) {
+        expect(call.headers.get("apikey")).toBe(ANON_KEY);
+        expect(call.headers.get("sb-forwarded-for")).toBeNull();
+      }
+
+      vi.stubEnv("SUPABASE_SECRET_KEY", "sb_secret_test_forwarding_key");
+      vi.stubEnv("TRUSTED_PROXY_HOPS", "0"); // client IP unknown → nothing to forward
+      const unknownIp = stubGoTrue({ "POST /auth/v1/otp": () => json(200, {}) });
+      expect((await otpPost(otpRequest({ email: uniqueEmail() }))).status).toBe(200);
+      expect(unknownIp[0].headers.get("sb-forwarded-for")).toBeNull();
+    });
+  });
+});
+
+describe("POST /api/auth/otp same-origin check (RA-6)", () => {
+  const PUBLIC = "https://arabclue.example";
+  // `next start` / a custom server: req.url carries the server's own host:port, never the public one.
+  const INTERNAL = "http://localhost:3000";
+
+  function proxiedOtp(origin: string, extra: Record<string, string> = {}): NextRequest {
+    ipCounter += 1;
+    return new NextRequest(`${INTERNAL}/api/auth/otp`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        host: "arabclue.example",
+        "x-forwarded-host": "arabclue.example",
+        "x-forwarded-proto": "https",
+        "x-forwarded-for": `198.51.100.${ipCounter}`,
+        "sec-fetch-site": "same-origin",
+        origin,
+        ...extra
+      },
+      body: JSON.stringify({ email: uniqueEmail(), mode: "login" })
+    });
+  }
+
+  it("accepts the public origin behind a proxy even when NEXT_PUBLIC_SITE_URL is unset", async () => {
+    vi.stubEnv("NEXT_PUBLIC_SITE_URL", "");
+    const calls = stubGoTrue({ "POST /auth/v1/otp": () => json(200, {}) });
+    const res = await otpPost(proxiedOtp(PUBLIC));
+    expect(res.status).toBe(200);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("accepts a Host-only proxy (no X-Forwarded-Host) and still rejects foreign origins with a distinct, reported code", async () => {
+    vi.stubEnv("NEXT_PUBLIC_SITE_URL", "");
+    const calls = stubGoTrue({ "POST /auth/v1/otp": () => json(200, {}) });
+    const hostOnly = proxiedOtp(PUBLIC);
+    hostOnly.headers.delete("x-forwarded-host");
+    expect((await otpPost(hostOnly)).status).toBe(200);
+
+    vi.mocked(reportError).mockClear();
+    const foreign = await otpPost(proxiedOtp("https://evil.example", { "sec-fetch-site": "cross-site" }));
+    expect(foreign.status).toBe(403);
+    expect(((await foreign.json()) as { code: string }).code).toBe("cross_site");
+    expect(foreign.headers.getSetCookie()).toEqual([]);
+    expect(reportError).toHaveBeenCalledTimes(1);
+    const [, context] = vi.mocked(reportError).mock.calls[0];
+    expect(context).toMatchObject({ route: "POST /api/auth/otp", status: 403 });
+    expect(JSON.stringify(context?.extra)).toContain("https://evil.example");
+    expect(calls).toHaveLength(1);
   });
 });
 
@@ -207,6 +329,25 @@ describe("GET /auth/callback (PKCE code)", () => {
     }
   });
 
+  // RA-1 / RA-5: a dot-segment next normalised to "//host" made relativeRedirect throw AFTER the
+  // one-time token had been consumed, so the user ended on /login?error=unknown, signed out.
+  it.each([
+    ["/auth/callback", () => callbackGet],
+    ["/auth/confirm", () => confirmGet]
+  ])("%s signs the user in and lands on /dashboard for dot-segment next values", async (path, handler) => {
+    for (const next of ["/.//evil.example/x", "/%2e//evil.example", "/a/..//evil.example", "/x/.././/evil", "/./%2F/evil.example"]) {
+      const calls = stubGoTrue({ "POST /auth/v1/verify": () => json(200, fakeSession()) });
+      const res = await handler()(
+        new NextRequest(`${SITE}${path}?token_hash=th-${calls.length}&type=magiclink&next=${encodeURIComponent(next)}`)
+      );
+      expect(res.status, next).toBe(303);
+      expect(res.headers.get("location"), next).toBe("/dashboard");
+      expect(calls, next).toHaveLength(1);
+      const cookies = setCookies(res);
+      expect((cookies.get(AUTH_COOKIE) ?? cookies.get(`${AUTH_COOKIE}.0`))?.value, next).toMatch(/^base64-/);
+    }
+  });
+
   it("treats a request without code or token_hash as an invalid link", async () => {
     stubGoTrue({});
     const res = await callbackGet(new NextRequest(`${SITE}/auth/callback`));
@@ -239,6 +380,75 @@ describe("GET /auth/confirm (token hash)", () => {
     const res = await confirmGet(new NextRequest(`${SITE}/auth/confirm?token_hash=x&type=sms`));
     expect(res.headers.get("location")).toBe("/login?error=link_invalid");
     expect(calls).toHaveLength(0);
+  });
+
+  // RA-4: junk token hashes used to reach GoTrue without any app-side cap, draining the shared
+  // per-IP verify budget of this server for every merchant.
+  it("caps verification attempts per client before calling Supabase", async () => {
+    const calls = stubGoTrue({ "POST /auth/v1/verify": () => authError(403, "otp_expired", "expired") });
+    const confirm = () =>
+      confirmGet(new NextRequest(`${SITE}/auth/confirm?token_hash=junk&type=email`, { headers: { "x-forwarded-for": "203.0.113.150" } }));
+    for (let i = 0; i < 30; i++) expect((await confirm()).headers.get("location")).toBe("/login?error=link_expired");
+    const limited = await confirm();
+    expect(limited.status).toBe(303);
+    expect(limited.headers.get("location")).toBe("/login?error=rate_limited");
+    expect(calls).toHaveLength(30);
+    // Another client still gets through.
+    const other = await confirmGet(
+      new NextRequest(`${SITE}/auth/confirm?token_hash=junk&type=email`, { headers: { "x-forwarded-for": "203.0.113.151" } })
+    );
+    expect(other.headers.get("location")).toBe("/login?error=link_expired");
+  });
+
+  describe("Magic Link template redirect_to={{ .RedirectTo }} (RA-7)", () => {
+    // The documented template: …&type=email&next=/dashboard&redirect_to={{ .RedirectTo }} (last param).
+    // Go's text/template inserts RedirectTo verbatim, so its own query arrives unescaped.
+    const confirmWith = (redirectTo: string, extra = "") => {
+      stubGoTrue({ "POST /auth/v1/verify": () => json(200, fakeSession()) });
+      return confirmGet(
+        new NextRequest(`${SITE}/auth/confirm?token_hash=rt-hash&type=email&next=/dashboard${extra}&redirect_to=${redirectTo}`)
+      );
+    };
+
+    it("resumes the next the sign-in was requested with (OAuth start, deep links)", async () => {
+      const oauth = await confirmWith(`${SITE}/auth/callback?next=${encodeURIComponent("/api/oauth/linkedin/start")}`);
+      expect(oauth.headers.get("location")).toBe("/api/oauth/linkedin/start");
+      const billing = await confirmWith(`${SITE}/auth/callback?next=%2Fbilling`);
+      expect(billing.headers.get("location")).toBe("/billing");
+    });
+
+    it("keeps a nested query intact (Moyasar return URL)", async () => {
+      const target = "/billing/complete?intent=abc123&plan=pro";
+      const res = await confirmWith(`${SITE}/auth/callback?next=${encodeURIComponent(target)}`);
+      expect(res.headers.get("location")).toBe(target);
+    });
+
+    it("also understands an escaped RedirectTo", async () => {
+      const res = await confirmWith(encodeURIComponent(`${SITE}/auth/callback?next=${encodeURIComponent("/billing?tab=plans")}`));
+      expect(res.headers.get("location")).toBe("/billing?tab=plans");
+    });
+
+    it.each([
+      ["a foreign origin", "https://evil.example/auth/callback?next=%2Fbilling"],
+      ["the bare Site URL (no valid redirect_to was requested)", SITE],
+      ["the Site URL with a slash", `${SITE}/`],
+      ["another path on our origin", `${SITE}/billing?next=%2Fbilling`],
+      ["an unsafe next inside it", `${SITE}/auth/callback?next=${encodeURIComponent("/.//evil.example")}`],
+      ["the signup default (a returning user who started on /signup)", `${SITE}/auth/callback?next=%2Fwelcome`],
+      ["garbage", "not a url"]
+    ])("falls back to the template's next for %s", async (_label, redirectTo) => {
+      const res = await confirmWith(redirectTo);
+      expect(res.status).toBe(303);
+      expect(res.headers.get("location")).toBe("/dashboard");
+    });
+
+    it("keeps the resumed next on failure, so a new link returns there", async () => {
+      stubGoTrue({ "POST /auth/v1/verify": () => authError(403, "otp_expired", "expired") });
+      const res = await confirmGet(
+        new NextRequest(`${SITE}/auth/confirm?token_hash=old&type=email&next=/dashboard&redirect_to=${SITE}/auth/callback?next=%2Fbilling`)
+      );
+      expect(res.headers.get("location")).toBe("/login?error=link_expired&next=%2Fbilling");
+    });
   });
 
   it("degrades to auth_unavailable (not a 500) when Supabase is unreachable or unconfigured", async () => {

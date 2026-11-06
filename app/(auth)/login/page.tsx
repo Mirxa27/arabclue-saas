@@ -4,8 +4,9 @@ import { Suspense, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Field, Input } from "@/components/ui/primitives";
-import { ImplicitSessionRescue } from "@/components/auth/implicit-session-rescue";
 import { AuthMessage } from "@/components/auth/auth-message";
+import { useAuthFragment } from "@/components/auth/legacy-link-notice";
+import { fragmentNoticeCode } from "@/lib/auth/auth-fragment";
 import { safeRedirectPath } from "@/lib/auth/redirect";
 import { loginErrorMessage, type LoginErrorCode } from "@/lib/auth/login-errors";
 import Link from "next/link";
@@ -20,7 +21,10 @@ function LoginForm() {
   // Set by /auth/callback and /auth/confirm when a link fails. Only the code is read; the
   // message is fixed text from lib/auth/login-errors (unknown codes → generic message).
   const linkError = searchParams.get("error");
-  const shownError = requestError ?? (state === "idle" ? linkError : null);
+  // A pre-PKCE link's #access_token=… (or Supabase's #error=…) is stripped and never used.
+  const authFragment = useAuthFragment();
+  const fragmentError = fragmentNoticeCode(authFragment, linkError);
+  const shownError = requestError ?? (state === "idle" ? (fragmentError ?? linkError) : null);
 
   const signupHref = nextPath ? `/signup?next=${encodeURIComponent(nextPath)}` : "/signup";
 
@@ -49,7 +53,6 @@ function LoginForm() {
 
   return (
     <div>
-      <ImplicitSessionRescue />
       <div className="marker-numeral mb-4">٠١ — SIGN IN</div>
       <h1 className="font-display text-4xl tracking-crisp leading-tight">Welcome back.</h1>
       <p className="mt-3 text-ink-soft">We&apos;ll send a magic link to your inbox — no passwords to remember.</p>
