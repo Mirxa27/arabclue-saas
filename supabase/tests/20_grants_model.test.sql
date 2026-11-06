@@ -105,7 +105,9 @@ begin
   end loop;
 
   -- merchants: read + UPDATE of the profile/consent columns only; never INSERT/DELETE
-  assert has_table_privilege('authenticated', 'public.merchants', 'SELECT'), 'authenticated must read merchants';
+  -- SELECT is column-scoped: no table-wide grant (it covered the tokens); allow-list in 80_merchants_column_privileges
+  assert has_any_column_privilege('authenticated', 'public.merchants', 'SELECT'), 'authenticated must read (its allow-listed columns of) merchants';
+  assert not has_table_privilege('authenticated', 'public.merchants', 'SELECT'), 'merchants SELECT must be column-scoped (20261106007000)';
   assert not has_table_privilege('authenticated', 'public.merchants', 'UPDATE'), 'merchants UPDATE must be column-scoped';
   assert not has_table_privilege('authenticated', 'public.merchants', 'DELETE'), 'authenticated must not delete merchants';
   assert not has_any_column_privilege('authenticated', 'public.merchants', 'INSERT'), 'merchants are created server-side only';

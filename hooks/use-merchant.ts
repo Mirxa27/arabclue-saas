@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { getBrowserSupabase } from "@/lib/db/supabase-browser";
+import { MERCHANT_CLIENT_COLUMNS } from "@/lib/merchant/columns";
 import type { Merchant } from "@/lib/types/database";
 
 type UseMerchantResult = {
@@ -27,9 +28,11 @@ export function useMerchant(): UseMerchantResult {
         setMerchant(null);
         return;
       }
+      // Browser code: the secret-free client columns only (authenticated cannot read the Salla
+      // tokens or the ZATCA CSID; `select("*")` is refused with 42501).
       const { data, error: merchantErr } = await sb
         .from("merchants")
-        .select("*")
+        .select(MERCHANT_CLIENT_COLUMNS)
         .eq("owner_user_id", user.id)
         .maybeSingle();
       if (merchantErr) throw merchantErr;

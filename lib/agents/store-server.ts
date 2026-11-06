@@ -66,9 +66,28 @@ export async function applyAgentPatch(merchant: Merchant, patch: AgentPatch): Pr
   return buildAgentEntry(patch.role, data as AgentSettingRow);
 }
 
-/** Persist agent enablement after OAuth or install flows. */
-export async function updateAgentStatus(merchantId: string, role: AgentRole, enabled: boolean): Promise<void> {
+/**
+ * Switch a persona agent on or off after an OAuth or install flow (every social OAuth callback,
+ * the manual channel connect route, the Salla connect callback).
+ *
+ * Switching ON is tied to the merchant's plan exactly like PATCH /api/agents/status: when the plan
+ * or subscription does not include the agent's module nothing is written (an existing row keeps
+ * its state) and the result is false. Switching off always applies. Returns whether the agent is
+ * enabled now.
+ */
+export async function updateAgentStatus(merchantId: string, role: AgentRole, enabled: boolean): Promise<boolean> {
   const supabase = getServiceSupabase();
+  if (enabled) {
+    const { data, error: planErr } = await supabase
+      .from("merchants")
+      .select("plan, subscription_status")
+      .eq("id", merchantId)
+      .maybeSingle();
+    if (planErr) throw new Error(`Load merchant plan failed: ${planErr.message}`);
+    const entitlement = data as Pick<Merchant, "plan" | "subscription_status"> | null;
+    if (!entitlement || !merchantCanUseFeature(entitlement, featureForAgentRole(role))) return false;
+  }
+
   const { error } = await supabase.from("agent_settings").upsert(
     {
       merchant_id: merchantId,
@@ -83,4 +102,5 @@ export async function updateAgentStatus(merchantId: string, role: AgentRole, ena
   if (error) {
     throw new Error(error.message);
   }
+  return enabled;
 }

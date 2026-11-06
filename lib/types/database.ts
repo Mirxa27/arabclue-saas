@@ -11,15 +11,19 @@ export type SellerAddress = {
 };
 
 /**
- * public.merchants. Through the Data API a merchant may only UPDATE seller_name,
- * vat_number, cr_number, seller_address, store_url, dpa_accepted_at and dpa_version
- * (supabase/migrations/20261106001100_api_grants.sql); plan, subscription_*, salla_*,
- * tokens and zatca_* are written server-side with the service role.
+ * public.merchants as the signed-in owner reads it: exactly the columns authenticated may SELECT
+ * (lib/merchant/columns.ts, supabase/migrations/20261106007000_merchants_client_columns.sql).
+ * This is what getCurrentMerchant / getSessionContext / useMerchant return and what pages render.
+ *
+ * Through the Data API a merchant may only UPDATE seller_name, vat_number, cr_number,
+ * seller_address, store_url, dpa_accepted_at and dpa_version (20261106001100_api_grants.sql);
+ * plan, subscription_*, salla_* and zatca_* are written server-side with the service role.
+ * Credentials are not part of this type: see MerchantSecrets.
  */
 export type Merchant = {
   id: string;
   salla_merchant_id: string | null;
-  salla_state: string | null;
+  salla_store_name?: string | null;
   store_url: string | null;
   store_name?: string | null;
   name?: string | null;
@@ -28,21 +32,38 @@ export type Merchant = {
   vat_number: string | null;
   cr_number: string | null;
   seller_address: SellerAddress | null;
-  access_token: string | null;
-  refresh_token: string | null;
   token_expires_at: string | null;
+  salla_token_invalid_at?: string | null;
   plan: MerchantPlan;
   subscription_status?: "pending" | "active" | "past_due" | "canceled";
   subscription_expires_at?: string | null;
   billing_cycle_started_at?: string | null;
   owner_user_id: string | null;
-  zatca_csid: string | null;
   zatca_onboarded_at: string | null;
   installed_at: string | null;
   uninstalled_at: string | null;
   dpa_accepted_at?: string | null;
   dpa_version?: string | null;
 };
+
+/**
+ * Service-role only merchants columns (MERCHANT_SECRET_COLUMNS): Salla OAuth tokens (enc:v1:
+ * ciphertext), the token-refresh lease and the ZATCA credentials. `authenticated` cannot SELECT
+ * them; read them only with getServiceSupabase() in server code (lib/salla/tokens.ts,
+ * lib/merchant/secrets.ts) and never pass them to a client component.
+ */
+export type MerchantSecrets = {
+  salla_state: string | null;
+  access_token: string | null;
+  refresh_token: string | null;
+  salla_refresh_lease?: string | null;
+  salla_refresh_lease_until?: string | null;
+  zatca_csid: string | null;
+  zatca_private_key_encrypted?: string | null;
+};
+
+/** A full merchants row, as only the service role can read it. */
+export type MerchantRow = Merchant & MerchantSecrets;
 
 export type InvoiceStatus = "generated" | "submitted" | "cleared" | "rejected" | "failed";
 

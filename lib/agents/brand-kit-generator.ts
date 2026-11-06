@@ -7,12 +7,16 @@ import { z } from "zod";
 import { aiStructured } from "@/lib/ai/providers";
 import { HttpError } from "@/lib/api/errors";
 import { reportError } from "@/lib/observability/error-reporter";
-import { BRAND_DIALECTS, type BrandDialect } from "@/lib/merchant/onboarding-schema";
+import { BRAND_DIALECTS, MAX_BRAND_ESSENCE, MAX_BRAND_NAME, type BrandDialect } from "@/lib/merchant/onboarding-schema";
 
+/**
+ * Same limits as the inputs that feed it (RA-15): the wizard's store name / the Brand page's
+ * brand name (≤ 200) and the essence the wizard sends as `description` (≤ 1,000).
+ */
 export const BrandKitGenerateBodySchema = z.object({
-  brand_name: z.string().trim().min(1).max(120),
+  brand_name: z.string().trim().min(1).max(MAX_BRAND_NAME),
   /** Optional context: what the store sells / for whom. */
-  description: z.string().trim().max(500).optional(),
+  description: z.string().trim().max(MAX_BRAND_ESSENCE).optional(),
   dialect: z.enum(BRAND_DIALECTS).optional()
 });
 export type BrandKitGenerateInput = z.infer<typeof BrandKitGenerateBodySchema>;

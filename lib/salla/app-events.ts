@@ -18,7 +18,19 @@ import {
   type SallaWebhookEvent
 } from "@/lib/salla/oauth";
 import { markSallaStoreUninstalled, recordSallaAuthorization, type SallaAuthorizationOutcome } from "@/lib/salla/connect";
+import { sallaDateToInstant } from "@/lib/salla/order-invoice";
 import { SallaAppStoreAuthorizeEventSchema } from "@/lib/types/salla";
+
+/**
+ * Salla's event time (`created_at`, e.g. "2022-12-31 12:31:25") as an ISO instant. Salla prints
+ * wall-clock times in Asia/Riyadh (the documented dates carry `timezone: "Asia/Riyadh"` /
+ * GMT+0300). Null when absent or not a valid date: the event is then applied unordered.
+ * Lifecycle events are ordered by it (RB-S2, salla_record_uninstall / salla_apply_authorization).
+ */
+export function sallaEventTime(createdAt: string | null | undefined): string | null {
+  if (typeof createdAt !== "string" || !createdAt.trim()) return null;
+  return sallaDateToInstant({ date: createdAt })?.date.toISOString() ?? null;
+}
 
 /** Keys that hold credentials in Salla payloads (token pairs, secrets). Removed before logging. */
 const SECRET_KEY = /^(access_token|refresh_token|id_token|token|client_secret|secret|password|authorization)$/i;
@@ -87,7 +99,13 @@ export async function handleAppStoreAuthorize(sb: SupabaseClient, evt: SallaWebh
     identityError = err;
   }
 
-  const result = await recordSallaAuthorization(sb, { storeId, tokens, scope: scope ?? null, identity });
+  const result = await recordSallaAuthorization(sb, {
+    storeId,
+    tokens,
+    scope: scope ?? null,
+    identity,
+    eventAt: sallaEventTime(parsed.data.created_at)
+  });
   await logSallaEvent(sb, "salla.app.store.authorize", storeId, {
     outcome: result.outcome,
     scope: scope ?? null,
@@ -110,8 +128,12 @@ export async function handleAppStoreAuthorize(sb: SupabaseClient, evt: SallaWebh
   return result;
 }
 
+/**
+ * app.uninstalled, in Salla's event order: a late or retried delivery older than the stored
+ * authorization (the merchant reinstalled meanwhile) is acknowledged and logged as 'stale'.
+ */
 export async function handleAppUninstalled(sb: SupabaseClient, evt: SallaWebhookEvent): Promise<void> {
   const storeId = String(evt.merchant);
-  await markSallaStoreUninstalled(sb, storeId);
-  await logSallaEvent(sb, "salla.uninstalled", storeId, evt);
+  const outcome = await markSallaStoreUninstalled(sb, storeId, sallaEventTime(evt.created_at));
+  await logSallaEvent(sb, "salla.uninstalled", storeId, { ...evt, outcome });
 }

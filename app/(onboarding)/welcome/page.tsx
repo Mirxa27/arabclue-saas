@@ -22,7 +22,13 @@ import {
 import { trackClientEvent } from "@/lib/analytics/client";
 import { ALL_PERSONAS, type Persona } from "@/lib/agents/personas";
 import { planCards, planModules, personaAvailableOnPlan } from "@/lib/billing/plan-summary";
-import { splitAttributes } from "@/lib/merchant/onboarding-schema";
+import {
+  MAX_BRAND_ATTRIBUTES,
+  MAX_BRAND_ESSENCE,
+  MAX_BRAND_NAME,
+  brandListError,
+  splitAttributes
+} from "@/lib/merchant/onboarding-schema";
 import OnboardingChat from "@/components/dashboard/onboarding-chat";
 
 type Step = 1 | 2 | 3 | 4 | 5;
@@ -53,6 +59,8 @@ export default function WelcomePage() {
   const [dialect, setDialect] = useState<Dialect>("khaliji");
   const [kitGenerating, setKitGenerating] = useState(false);
   const [kitError, setKitError] = useState<string | null>(null);
+  // Checked where it is typed: an over-long attribute would otherwise only fail at step 5.
+  const attributesIssue = brandListError(attributes, MAX_BRAND_ATTRIBUTES);
 
   // Step 3: plan tier
   const [plan, setPlan] = useState<"lite" | "plus" | "pro">("plus");
@@ -154,6 +162,10 @@ export default function WelcomePage() {
   // /billing and applied when Moyasar confirms the payment.
   async function finish() {
     if (!dpaAccepted || submitting) return;
+    if (attributesIssue) {
+      setStep(2);
+      return;
+    }
     setSubmitting(true);
     setSubmitError(null);
     try {
@@ -248,7 +260,7 @@ export default function WelcomePage() {
                 <button
                   type="button"
                   onClick={() => setStep((s) => (s + 1) as Step)}
-                  disabled={step === 1 && !businessName}
+                  disabled={(step === 1 && !businessName) || (step === 2 && attributesIssue !== null)}
                   className="p-2 border border-rule hover:border-ink/30 rounded-lg text-ink-soft hover:text-ink transition disabled:opacity-30 disabled:cursor-not-allowed"
                   aria-label="Forward"
                 >
@@ -274,7 +286,7 @@ export default function WelcomePage() {
                   
                   <div className="space-y-4 pt-2">
                     <Field label="Business legal name" hint="Your storefront brand name. Use correct legal casing.">
-                      <Input dir="auto" value={businessName} maxLength={200} onChange={(e) => setBusinessName(e.target.value)} placeholder="e.g., Bayt Al-Oud" className="rounded-xl border-rule/80 focus:border-ink text-base" />
+                      <Input dir="auto" value={businessName} maxLength={MAX_BRAND_NAME} onChange={(e) => setBusinessName(e.target.value)} placeholder="e.g., Bayt Al-Oud" className="rounded-xl border-rule/80 focus:border-ink text-base" />
                     </Field>
                     
                     <Field label="VAT number" hint="15-digit Tax identification number. Leave blank if not VAT-registered.">
@@ -301,11 +313,25 @@ export default function WelcomePage() {
 
                   <div className="space-y-4 pt-2">
                     <Field label="Essence" hint="One concise sentence: what you sell and who your target audience is.">
-                      <Textarea dir="auto" rows={3} maxLength={1000} value={essence} onChange={(e) => setEssence(e.target.value)} placeholder="Premium Oud fragrances and traditional incense tailored for modern Saudi households." className="rounded-xl border-rule/80 focus:border-ink text-base leading-relaxed" />
+                      <Textarea dir="auto" rows={3} maxLength={MAX_BRAND_ESSENCE} value={essence} onChange={(e) => setEssence(e.target.value)} placeholder="Premium Oud fragrances and traditional incense tailored for modern Saudi households." className="rounded-xl border-rule/80 focus:border-ink text-base leading-relaxed" />
                     </Field>
 
                     <Field label="Voice attributes" hint="Comma-separated adjectives — , or ، (e.g., heritage, elegant, warm, premium)">
-                      <Input dir="auto" value={attributes} onChange={(e) => setAttributes(e.target.value)} placeholder="heritage, elegant, warm, premium" className="rounded-xl border-rule/80 focus:border-ink text-base" />
+                      <Input
+                        dir="auto"
+                        value={attributes}
+                        onChange={(e) => setAttributes(e.target.value)}
+                        aria-invalid={attributesIssue !== null}
+                        aria-describedby={attributesIssue ? "voice-attributes-error" : undefined}
+                        placeholder="heritage, elegant, warm, premium"
+                        className="rounded-xl border-rule/80 focus:border-ink text-base"
+                      />
+                      {attributesIssue && (
+                        <div id="voice-attributes-error" role="alert" className="text-[11px] leading-relaxed text-red-700 dark:text-red-400">
+                          <p className="font-arabic" dir="rtl">{attributesIssue.ar}</p>
+                          <p>{attributesIssue.en}</p>
+                        </div>
+                      )}
                     </Field>
 
                     <Field label="Arabic Dialect Strategy" hint="Select the primary dialect register for AI content generation.">
@@ -325,7 +351,7 @@ export default function WelcomePage() {
                     <Button variant="ghost" onClick={() => setStep(1)} className="rounded-xl">
                       Back
                     </Button>
-                    <Button onClick={() => setStep(3)} className="rounded-xl gap-2 font-semibold">
+                    <Button onClick={() => setStep(3)} disabled={attributesIssue !== null} className="rounded-xl gap-2 font-semibold">
                       Continue to Plan <ArrowRight size={16} />
                     </Button>
                   </div>

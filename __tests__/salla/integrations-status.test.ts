@@ -2,10 +2,14 @@
  * UI-001 — GET /api/integrations/status: the contract the integrations page reads
  * ({ salla_connected, salla_install_url, channel_status, oauth_configured, social_oauth_enabled, … }),
  * never any token, and a claimable App Store install only for the confirmed owner email.
+ *
+ * RA-3 / RA-9: the session's merchant row carries only the client columns (no tokens), so the
+ * Salla connection state is read with the service role by merchant id.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createFakeSupabase, type FakeCall } from "../helpers/fake-supabase";
 import { encryptSecret } from "@/lib/crypto/secrets";
+import { MERCHANT_CLIENT_COLUMN_LIST } from "@/lib/merchant/columns";
 
 const session = vi.hoisted(() => ({
   user: null as null | { id: string; email?: string | null; email_confirmed_at?: string | null },
@@ -14,6 +18,8 @@ const session = vi.hoisted(() => ({
 const features = vi.hoisted(() => ({ socialOAuth: true }));
 let userDb = createFakeSupabase("user");
 let serviceDb = createFakeSupabase("service");
+/** The merchant row as the service role sees it (tokens included). */
+let row: Record<string, unknown> = {};
 
 vi.mock("@/lib/observability/error-reporter", () => ({ reportError: vi.fn() }));
 vi.mock("@/lib/auth/session", async (importOriginal) => ({
@@ -33,8 +39,12 @@ import { GET } from "@/app/api/integrations/status/route";
 
 const M = "aaaaaaaa-0000-4000-8000-00000000000a";
 
+/**
+ * Set the merchant: the full row is what the service role reads; the session merchant is what
+ * getSessionContext returns now — only the client columns (no access/refresh token).
+ */
 function merchant(extra: Record<string, unknown> = {}) {
-  return {
+  row = {
     id: M,
     owner_user_id: "user-a",
     salla_merchant_id: "777",
@@ -46,7 +56,17 @@ function merchant(extra: Record<string, unknown> = {}) {
     uninstalled_at: null,
     ...extra
   };
+  return Object.fromEntries(Object.entries(row).filter(([k]) => (MERCHANT_CLIENT_COLUMN_LIST as readonly string[]).includes(k)));
 }
+
+function serviceHandler(call: FakeCall) {
+  if (call.table === "salla_installs") return { data: [pendingRow] };
+  if (call.table === "merchants" && call.op === "select") return { data: row };
+  return undefined;
+}
+
+const sallaLookups = () => serviceDb.calls.filter((c) => c.table === "merchants");
+const installLookups = () => serviceDb.calls.filter((c) => c.table === "salla_installs");
 
 function channelsDb(platforms: string[]) {
   return createFakeSupabase("user", (call: FakeCall) =>
@@ -81,7 +101,7 @@ beforeEach(() => {
   session.user = { id: "user-a", email: "Owner@Example.com", email_confirmed_at: "2026-11-01T00:00:00Z" };
   session.merchant = merchant();
   userDb = channelsDb(["instagram", "whatsapp", "not-a-platform"]);
-  serviceDb = createFakeSupabase("service", (call) => (call.table === "salla_installs" ? { data: [pendingRow] } : undefined));
+  serviceDb = createFakeSupabase("service", serviceHandler);
 });
 
 afterEach(() => vi.unstubAllEnvs());
@@ -117,7 +137,25 @@ describe("GET /api/integrations/status", () => {
     // channels come from the merchant's own RLS-scoped session
     expect(userDb.calls[0]).toMatchObject({ client: "user", table: "social_channels" });
     expect(userDb.calls[0].filters).toEqual([["eq", "merchant_id", M]]);
-    expect(serviceDb.calls).toHaveLength(0);
+    // the Salla state from the service role (by merchant id); no install lookup while connected
+    expect(sallaLookups()).toHaveLength(1);
+    expect(sallaLookups()[0].filters).toEqual([["eq", "id", M]]);
+    expect(installLookups()).toHaveLength(0);
+    expect(userDb.calls.some((c) => c.table === "merchants")).toBe(false);
+  });
+
+  it("knows the store is connected although the session merchant carries no token columns (RA-3)", async () => {
+    const sessionRow = merchant();
+    session.merchant = sessionRow;
+    expect(sessionRow).not.toHaveProperty("access_token");
+    expect(sessionRow).not.toHaveProperty("refresh_token");
+    const body = await (await GET()).json();
+    expect(body).toMatchObject({ salla_connected: true, salla_store: { id: "777", name: "Bait Al Oud" } });
+
+    // tokens dropped on the service side (Disconnect / app.uninstalled) → not connected
+    row = { ...row, access_token: null, refresh_token: null };
+    const after = await (await GET()).json();
+    expect(after.salla_connected).toBe(false);
   });
 
   it("not connected: offers the confirmed owner's claimable App Store install", async () => {
@@ -131,7 +169,7 @@ describe("GET /api/integrations/status", () => {
       store_domain: "https://oud.example",
       authorized_at: pendingRow.authorized_at
     });
-    const lookup = serviceDb.calls[0];
+    const lookup = installLookups()[0];
     expect(lookup.table).toBe("salla_installs");
     expect(lookup.filters).toEqual(
       expect.arrayContaining([
@@ -146,7 +184,7 @@ describe("GET /api/integrations/status", () => {
     session.user = { id: "user-a", email: "owner@example.com", email_confirmed_at: null };
     const body = await (await GET()).json();
     expect(body.salla_pending_install).toBeNull();
-    expect(serviceDb.calls).toHaveLength(0);
+    expect(installLookups()).toHaveLength(0);
   });
 
   it("reports reconnect-needed and uninstalled stores as not connected", async () => {

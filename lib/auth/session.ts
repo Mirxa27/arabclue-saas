@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import type { User } from "@supabase/supabase-js";
 import type { Merchant } from "@/lib/types/database";
 import { HttpError } from "@/lib/api/errors";
+import { MERCHANT_CLIENT_COLUMNS } from "@/lib/merchant/columns";
 
 export class AuthError extends Error {
   readonly status = 401;
@@ -32,16 +33,22 @@ export async function requireUserApi() {
   return user;
 }
 
+/**
+ * The session user's merchant row — the client columns only (authenticated cannot SELECT the
+ * Salla tokens or ZATCA credentials; read those with the service role). A failed lookup throws:
+ * it must not look like "this user has no merchant" (redirect to /welcome, 403).
+ */
 export async function getCurrentMerchant(): Promise<Merchant | null> {
   const user = await getCurrentUser();
   if (!user) return null;
   const supabase = await getServerSupabase();
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from("merchants")
-    .select("*")
+    .select(MERCHANT_CLIENT_COLUMNS)
     .eq("owner_user_id", user.id)
     .maybeSingle();
-  return data as Merchant | null;
+  if (error) throw new Error(`merchant lookup failed: ${error.message}`);
+  return (data as Merchant | null) ?? null;
 }
 
 export async function requireMerchant() {
@@ -56,11 +63,12 @@ export async function getSessionContext(): Promise<{ user: User | null; merchant
   const { data } = await supabase.auth.getUser();
   const user = data.user ?? null;
   if (!user) return { user: null, merchant: null };
-  const { data: merchant } = await supabase
+  const { data: merchant, error } = await supabase
     .from("merchants")
-    .select("*")
+    .select(MERCHANT_CLIENT_COLUMNS)
     .eq("owner_user_id", user.id)
     .maybeSingle();
+  if (error) throw new Error(`merchant lookup failed: ${error.message}`);
   return { user, merchant: (merchant as Merchant | null) ?? null };
 }
 

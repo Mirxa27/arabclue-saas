@@ -137,8 +137,9 @@ const AgentCard = memo(function AgentCard({
       </p>
 
       {lastError && (
-        <div className="mb-3 rounded-lg border border-red-500/20 bg-red-500/10 p-2">
-          <p className="truncate font-arabic text-[11px] text-red-600 dark:text-red-400">
+        <div role="alert" className="mb-3 rounded-lg border border-red-500/20 bg-red-500/10 p-2">
+          {/* not truncated: the reason (e.g. the plan gate) is the whole point of the message */}
+          <p dir="auto" className="line-clamp-4 font-arabic text-[11px] leading-relaxed text-red-600 dark:text-red-400" title={lastError}>
             {lastError}
           </p>
         </div>

@@ -106,7 +106,8 @@ describe("POST /api/brand-kit/generate", () => {
     expect((await call({ brand_name: "x" })).status).toBe(401);
     signIn();
     expect((await call({ brand_name: "" })).status).toBe(400);
-    expect((await call({ brand_name: "x".repeat(121) })).status).toBe(400);
+    // same cap as the store-name input (RA-15: limits in __tests__/merchant/brand-input-limits.test.ts)
+    expect((await call({ brand_name: "x".repeat(201) })).status).toBe(400);
   });
 
   it("is rate-limited per user", async () => {
