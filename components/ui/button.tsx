@@ -17,9 +17,13 @@ const variants: Record<ButtonVariant, string> = {
   outline: "border border-rule/50 text-ink-mute hover:text-ink hover:border-rule/80 bg-transparent"
 };
 
+// Touch targets (TOUCH-01): `sm` stays compact (32px) for a mouse but is at least 44×44 on a
+// touch screen — also when a call site squeezes it with `h-8`/`h-7 w-7`, since min-height and
+// min-width win over height and width. `md` is 44px tall with text; `min-h-11` keeps an
+// icon-only `md` button (otherwise 40px) at 44px as well.
 const sizes: Record<ButtonSize, string> = {
-  sm: "px-4 py-2 text-xs rounded-lg gap-1.5 font-mono uppercase tracking-wider font-semibold",
-  md: "px-5 py-3 text-sm rounded-xl gap-2 font-medium",
+  sm: "px-4 py-2 text-xs rounded-lg gap-1.5 font-mono uppercase tracking-wider font-semibold [@media(pointer:coarse)]:min-h-11 [@media(pointer:coarse)]:min-w-11",
+  md: "min-h-11 px-5 py-3 text-sm rounded-xl gap-2 font-medium",
   lg: "px-7 py-4 text-base rounded-2xl gap-2.5 font-semibold"
 };
 

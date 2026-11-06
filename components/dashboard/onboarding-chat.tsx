@@ -56,6 +56,20 @@ export default function OnboardingChat({ step, context, open, onToggle }: Onboar
     }
   }, [open]);
 
+  // Escape closes the chat (it is a modal panel over the wizard).
+  const onToggleRef = useRef(onToggle);
+  useEffect(() => {
+    onToggleRef.current = onToggle;
+  });
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onToggleRef.current();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [open]);
+
   // Reset welcome message when step changes
   useEffect(() => {
     setMessages([
@@ -138,14 +152,24 @@ export default function OnboardingChat({ step, context, open, onToggle }: Onboar
     <>
       {/* Backdrop */}
       <div
-        className="fixed inset-0 bg-ink/30 backdrop-blur-sm z-40 transition-opacity"
+        className="fixed inset-0 bg-ink/30 backdrop-blur-sm z-[60] transition-opacity"
         onClick={onToggle}
+        aria-hidden
       />
 
-      {/* Chat panel */}
-      <div className="fixed bottom-6 right-6 z-50 w-[360px] max-w-[calc(100vw-2rem)] max-h-[560px] rounded-2xl bg-paper border border-rule shadow-xl flex flex-col overflow-hidden animate-scale-in">
+      {/*
+        Chat panel (PANEL-01 / SAFEAREA-01): above the home indicator and the iOS keyboard
+        (--kb-inset), clear of the landscape notch, and never taller than the space under the
+        top safe area — the header and close button stay on screen in phone landscape.
+      */}
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="سارة · مساعدة التهيئة · Onboarding assistant"
+        className="fixed bottom-[calc(1.5rem+max(var(--safe-bottom),var(--kb-inset)))] right-[calc(1.5rem+max(var(--safe-left),var(--safe-right)))] z-[61] w-[360px] max-w-[calc(100vw-2rem-2*max(var(--safe-left),var(--safe-right)))] h-[min(30rem,calc(100dvh-3rem-var(--safe-top)-max(var(--safe-bottom),var(--kb-inset))))] rounded-2xl bg-paper border border-rule shadow-xl flex flex-col overflow-hidden animate-scale-in"
+      >
         {/* Header */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-rule/50 bg-paper-deep/40">
+        <div className="flex shrink-0 items-center justify-between ps-4 pe-2 py-1.5 border-b border-rule/50 bg-paper-deep/40">
           <div className="flex items-center gap-2.5">
             <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-accent to-accent-warm flex items-center justify-center text-paper text-sm font-bold shadow-sm">
               ✨
@@ -161,16 +185,17 @@ export default function OnboardingChat({ step, context, open, onToggle }: Onboar
             </div>
           </div>
           <button
+            type="button"
             onClick={onToggle}
-            className="p-1.5 rounded-lg hover:bg-rule/20 text-ink-mute hover:text-ink transition"
-            aria-label="إغلاق المحادثة"
+            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg hover:bg-rule/20 text-ink-mute hover:text-ink transition"
+            aria-label="إغلاق المحادثة · Close chat"
           >
-            <X size={16} />
+            <X size={16} aria-hidden />
           </button>
         </div>
 
         {/* Messages */}
-        <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3 min-h-[200px] max-h-[340px]">
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-3 space-y-3">
           {messages.map((msg, i) => (
             <div
               key={i}
@@ -182,7 +207,7 @@ export default function OnboardingChat({ step, context, open, onToggle }: Onboar
                     ? "bg-accent text-white rounded-br-md"
                     : "bg-paper-deep border border-rule/40 text-ink rounded-bl-md"
                 }`}
-                dir={msg.role === "assistant" ? "rtl" : "ltr"}
+                dir="auto"
               >
                 {msg.content}
               </div>

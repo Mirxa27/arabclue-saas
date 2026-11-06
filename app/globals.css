@@ -58,6 +58,12 @@
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --safe-left: env(safe-area-inset-left, 0px);
 
+  /* On-screen keyboard: how much of the layout viewport it covers. iOS Safari overlays the
+     keyboard (it ignores interactive-widget), so <ViewportInsets/> writes this from
+     window.visualViewport. Chromium resizes the layout viewport instead
+     (interactiveWidget: "resizes-content" in app/layout.tsx), so there it stays 0px. */
+  --kb-inset: 0px;
+
   /* Easing */
   --ease-spring: cubic-bezier(0.2, 0.7, 0.2, 1);
   --ease-out-expo: cubic-bezier(0.19, 1, 0.22, 1);
@@ -150,6 +156,24 @@
     overflow-x: hidden;
     min-height: 100vh;
     min-height: 100dvh;
+    /* viewport-fit=cover draws the page under the sensor housing in landscape; keep in-flow
+       content inside the side safe areas (fixed chrome pads itself). */
+    padding-left: var(--safe-left);
+    padding-right: var(--safe-right);
+  }
+
+  /* iOS Safari zooms the page when a focused field's text is below 16px, and almost every
+     field here is text-sm/text-xs. On touch (coarse) pointers every text-entry control renders
+     at 16px: (0,3,1) beats any single utility's (0,1,0). Larger sizes are left alone; desktop
+     keeps the compact sizes. Pinch-zoom stays enabled (no maximum-scale in the viewport). */
+  @media (pointer: coarse) {
+    :root :is(
+      input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"], [type="color"], [type="button"], [type="submit"], [type="reset"], [type="image"], [type="hidden"]),
+      select,
+      textarea
+    ):not(.text-lg, .text-xl, .text-2xl, .text-3xl, .text-4xl, .text-5xl) {
+      font-size: 16px;
+    }
   }
 
   /* Arabic / RTL */
@@ -289,6 +313,18 @@
     transition: transform 100ms ease;
   }
 
+  /* Dashboard stacking model — everything below lives in the root stacking context; <main>
+     deliberately has no z-index (a z-index there capped every page overlay under the chrome):
+       page content ........................ auto
+       sticky topbar ....................... z-30
+       mobile tab bar ...................... z-40
+       floating chrome (support FAB/panel,
+         feedback launcher/card) ........... z-50
+       modal overlays (More sheet, page
+         drawers/modals) ................... z-[60] backdrop, z-[61] panel
+       toasts, command palette ............. z-[100]
+     Page overlays must be portaled to <body> (components/ui/portal.tsx): the content card's
+     backdrop-filter makes it the containing block of any position:fixed descendant. */
   .dashboard-shell {
     position: relative;
     display: flex;
@@ -298,6 +334,23 @@
       radial-gradient(circle at 8% 8%, color-mix(in srgb, var(--accent) 16%, transparent), transparent 24rem),
       radial-gradient(circle at 96% 2%, color-mix(in srgb, var(--accent-warm) 13%, transparent), transparent 22rem),
       linear-gradient(135deg, color-mix(in srgb, var(--paper) 86%, var(--paper-elevated)), var(--paper-deep));
+
+    /* Bottom-anchored chrome sits above whichever is taller: the mobile tab bar, the
+       on-screen keyboard or the home indicator. Fixed children inherit these. */
+    --nav-inset: 0px;
+    --chrome-bottom: max(var(--nav-inset), var(--kb-inset), var(--safe-bottom));
+    /* iPhone landscape insets are symmetric, so one value clears the notch on either side. */
+    --chrome-side: max(var(--safe-left), var(--safe-right));
+  }
+
+  @media (max-width: 1023.98px) {
+    .dashboard-shell {
+      --nav-inset: calc(4.75rem + var(--safe-bottom));
+    }
+    /* The tab bar slides away while a text field has focus on a touch device. */
+    .dashboard-shell[data-text-entry="true"] {
+      --nav-inset: 0px;
+    }
   }
 
   .dashboard-shell::before {
@@ -526,6 +579,12 @@
     min-width: 44px;
   }
 
+  @media (pointer: coarse) {
+    .dashboard-segment-btn {
+      min-height: 44px;
+    }
+  }
+
   @media (hover: hover) and (pointer: fine) {
     .hover-lift:hover { transform: translateY(-2px); }
     .hover-glow:hover { box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 8%, transparent); }
@@ -652,8 +711,10 @@
     transition: background-color 180ms ease, color 180ms ease, box-shadow 180ms ease;
   }
 
-  .dashboard-segment-btn:hover {
-    color: var(--ink);
+  @media (hover: hover) and (pointer: fine) {
+    .dashboard-segment-btn:hover {
+      color: var(--ink);
+    }
   }
 
   .dashboard-segment-btn[data-active="true"] {
@@ -690,7 +751,9 @@
     color: var(--ink-soft);
   }
   .data-table tbody tr { transition: background-color 200ms ease; }
-  .data-table tbody tr:hover { background: color-mix(in srgb, var(--paper-deep) 30%, transparent); }
+  @media (hover: hover) and (pointer: fine) {
+    .data-table tbody tr:hover { background: color-mix(in srgb, var(--paper-deep) 30%, transparent); }
+  }
   .data-table tbody tr:last-child td { border-bottom: none; }
 
   /* ── Bottom Sheet (Mobile) ────────────────────────────────────── */
@@ -988,6 +1051,8 @@
   opacity: 0.15;
   transition: opacity 300ms ease;
 }
-.glow-border-accent:hover::before {
-  opacity: 0.35;
+@media (hover: hover) and (pointer: fine) {
+  .glow-border-accent:hover::before {
+    opacity: 0.35;
+  }
 }

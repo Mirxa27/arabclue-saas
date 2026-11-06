@@ -1,37 +1,71 @@
 import type { Config } from "tailwindcss";
 
+/**
+ * Theme colours are CSS variables (globals.css swaps them for dark mode), so Tailwind cannot
+ * parse them to add an alpha channel. A plain `var(--paper)` made Tailwind 3 silently drop
+ * every opacity-modified utility (`bg-paper/78`, `border-rule/50`, `bg-ink/[0.06]` …): the
+ * mobile nav, More sheet, panels and backdrops rendered with no background at all.
+ *
+ * The `<alpha-value>` placeholder turns each token into a colour function: `bg-paper` compiles
+ * to `calc(var(--tw-bg-opacity, 1) * 100%)`, `bg-paper/78` to `calc(0.78 * 100%)` and
+ * `bg-ink/[0.06]` to `calc(0.06 * 100%)` of the variable, mixed with transparent (globals.css
+ * already relies on color-mix() throughout). __tests__/mobile/tailwind-alpha.test.ts compiles
+ * every `<colour>/<alpha>` class used in the repo against this config.
+ */
+const themeColor = (cssVar: `--${string}`) =>
+  `color-mix(in srgb, var(${cssVar}) calc(<alpha-value> * 100%), transparent)`;
+
 const config: Config = {
   content: [
     "./app/**/*.{ts,tsx}",
     "./components/**/*.{ts,tsx}",
     "./lib/**/*.{ts,tsx}"
   ],
+  future: {
+    // `hover:` (and `group-hover:` / `peer-hover:`) only apply on devices that can really
+    // hover, so styles no longer stick after a tap on phones and tablets (HOVER-01).
+    hoverOnlyWhenSupported: true
+  },
   theme: {
     extend: {
       colors: {
-        paper: "var(--paper)",
-        "paper-deep": "var(--paper-deep)",
-        "paper-elevated": "var(--paper-elevated)",
-        ink: "var(--ink)",
-        "ink-soft": "var(--ink-soft)",
-        "ink-mute": "var(--ink-mute)",
-        rule: "var(--rule)",
-        "rule-light": "var(--rule-light)",
-        accent: "var(--accent)",
-        "accent-deep": "var(--accent-deep)",
-        "accent-light": "var(--accent-light)",
-        "accent-warm": "var(--accent-warm)",
-        "accent-warm-deep": "var(--accent-warm-deep)",
-        "accent-warm-light": "var(--accent-warm-light)",
-        success: "var(--success)",
-        danger: "var(--danger)",
+        paper: themeColor("--paper"),
+        "paper-deep": themeColor("--paper-deep"),
+        "paper-elevated": themeColor("--paper-elevated"),
+        ink: themeColor("--ink"),
+        "ink-soft": themeColor("--ink-soft"),
+        "ink-mute": themeColor("--ink-mute"),
+        rule: themeColor("--rule"),
+        "rule-light": themeColor("--rule-light"),
+        accent: themeColor("--accent"),
+        "accent-deep": themeColor("--accent-deep"),
+        "accent-light": themeColor("--accent-light"),
+        "accent-warm": themeColor("--accent-warm"),
+        "accent-warm-deep": themeColor("--accent-warm-deep"),
+        "accent-warm-light": themeColor("--accent-warm-light"),
+        success: themeColor("--success"),
+        danger: themeColor("--danger"),
         // Glass surface tokens
         surface: {
-          DEFAULT: "var(--surface-glass)",
+          DEFAULT: themeColor("--surface-glass"),
           hover: "rgba(245, 239, 230, 0.80)",
           active: "rgba(245, 239, 230, 0.92)",
-          inverse: "var(--surface-inverse)",
+          inverse: themeColor("--surface-inverse"),
         },
+      },
+      // Steps used by the codebase on top of Tailwind's default 0/5/10…/95/100 scale. A modifier
+      // outside the scale (`bg-paper/73`) compiles to nothing, so the alpha test fails on it.
+      opacity: {
+        6: "0.06",
+        8: "0.08",
+        12: "0.12",
+        42: "0.42",
+        62: "0.62",
+        68: "0.68",
+        78: "0.78",
+        86: "0.86",
+        88: "0.88",
+        98: "0.98"
       },
       fontFamily: {
         display: ['"Instrument Serif"', "ui-serif", "Georgia", "serif"],

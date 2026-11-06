@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { ToastProvider } from "@/components/ui/toast";
+import { ViewportInsets } from "@/components/ui/viewport-insets";
 import { ClientErrorReporter } from "@/components/observability/client-error-reporter";
 import "./globals.css";
 
@@ -35,11 +36,16 @@ export const metadata: Metadata = {
 
 // Activates env(safe-area-inset-*) on notched devices (the CSS already consumes
 // the --safe-* vars) and matches the browser chrome + native controls to the
-// app's light/dark palette. Zoom is intentionally NOT disabled (accessibility).
+// app's light/dark palette. Zoom is intentionally NOT disabled (accessibility):
+// iOS focus-zoom is prevented by the 16px coarse-pointer rule in globals.css.
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",
+  // Chromium/Android: the on-screen keyboard resizes the layout viewport, so 100dvh and
+  // bottom-anchored UI stay above it. iOS Safari ignores this and overlays the keyboard;
+  // <ViewportInsets /> covers that case through --kb-inset.
+  interactiveWidget: "resizes-content",
   colorScheme: "light dark",
   themeColor: [
     { media: "(prefers-color-scheme: light)", color: "#F5EFE6" },
@@ -53,6 +59,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body>
         <ToastProvider>
           <ClientErrorReporter />
+          <ViewportInsets />
           {children}
         </ToastProvider>
       </body>
