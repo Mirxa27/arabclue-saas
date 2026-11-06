@@ -1,6 +1,5 @@
 import { createServerClient, type SetAllCookies } from "@supabase/ssr";
 import { NextRequest, NextResponse } from "next/server";
-import { userIsPlatformAdminEdge } from "@/lib/auth/platform-admin-edge";
 import {
   DEFAULT_AFTER_LOGIN,
   isAuthEndpointPath,
@@ -65,9 +64,11 @@ export async function middleware(req: NextRequest) {
     return redirectTo(loginPath({ next: `${pathname}${search}` }));
   }
 
-  if (adminProtected && user && !userIsPlatformAdminEdge(user)) {
-    return redirectTo("/dashboard?admin=denied");
-  }
+  // Admin authorization is NOT decided here: PLATFORM_ADMIN_EMAILS is admin-managed and
+  // hydrated from the database into the Node runtime only, which edge middleware never
+  // sees — an edge check bounced admins added via /admin/config. The authoritative gates
+  // are requirePlatformAdmin() in app/(admin)/layout.tsx and requirePlatformAdminApi() on
+  // every /api/admin/* route.
 
   if (isSignInPagePath(pathname) && user) {
     return redirectTo(safeRedirectPath(req.nextUrl.searchParams.get("next")) ?? DEFAULT_AFTER_LOGIN);

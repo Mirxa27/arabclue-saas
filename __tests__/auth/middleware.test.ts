@@ -114,3 +114,19 @@ describe("middleware session refresh", () => {
     expect(page.headers.getSetCookie().join("\n")).toContain("sb-abcdefgh-auth-token=base64-");
   });
 });
+
+describe("middleware and /admin (sweep #36)", () => {
+  it("does not deny a signed-in user at the edge; the admin layout decides with the hydrated admin list", async () => {
+    // An admin added via /admin/config exists only in the DB-hydrated Node env, never in edge middleware.
+    vi.stubEnv("PLATFORM_ADMIN_EMAILS", "");
+    getUser.mockResolvedValue({ data: { user: fakeUser(undefined, "new-admin@arabclue.com") } });
+    const res = await middleware(new NextRequest(`${SITE}/admin/config`));
+    expect(res.headers.get("location")).toBeNull();
+  });
+
+  it("still sends signed-out visitors of /admin to /login", async () => {
+    getUser.mockResolvedValue({ data: { user: null } });
+    const res = await middleware(new NextRequest(`${SITE}/admin`));
+    expect(new URL(res.headers.get("location") as string).pathname).toBe("/login");
+  });
+});
