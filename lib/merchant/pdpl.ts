@@ -108,7 +108,18 @@ function scoped<Q>(query: Q, scope: EventScope): Q {
 export type ErasureReport = { eventsDeleted: number; wathqCacheDeleted: number };
 
 /** Delete the merchant and everything not covered by `on delete cascade`. */
-export async function eraseMerchantData(sb: SupabaseClient, merchant: MerchantKeys): Promise<ErasureReport> {
+export async function eraseMerchantData(
+  sb: SupabaseClient,
+  merchant: MerchantKeys,
+  opts: { ownerEmail?: string | null } = {}
+): Promise<ErasureReport> {
+  // Parked Salla installs authorized by this user (Easy Mode, never claimed) carry their email.
+  const ownerEmail = opts.ownerEmail?.trim().toLowerCase();
+  if (ownerEmail) {
+    const { error: installsErr } = await sb.from("salla_installs").delete().eq("owner_email", ownerEmail);
+    if (installsErr) throw new Error(`erase salla_installs: ${installsErr.message}`);
+  }
+
   // Read the store history first: a failure must not leave a half-erased account.
   const windows = await loadSallaStoreWindows(sb, merchant);
   let eventsDeleted = 0;

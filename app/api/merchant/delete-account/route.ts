@@ -33,7 +33,7 @@ export async function POST(req: NextRequest) {
 
     const supabase = getServiceSupabase();
     // PDPL erasure: events (no FK) + cached CR data first, then the merchant row (cascades).
-    const report = await eraseMerchantData(supabase, merchant);
+    const report = await eraseMerchantData(supabase, merchant, { ownerEmail: user.email });
 
     const { error: authErr } = await supabase.auth.admin.deleteUser(user.id);
     if (authErr) throw new Error(authErr.message);

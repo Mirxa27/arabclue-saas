@@ -51,3 +51,19 @@ begin
   delete from public.merchants where seller_name = 'mix';
   delete from auth.users where email like 'mix-%@example.test';
 end $$;
+
+-- prune_salla_installs: removes only parked installs past the horizon; never inside the 30-day claim window
+do $$
+declare n integer;
+begin
+  insert into public.salla_installs (salla_merchant_id, access_token_encrypted, owner_email, authorized_at) values
+    ('prune-old', 'enc', 'old@example.test', now() - interval '90 days'),
+    ('prune-recent', 'enc', 'recent@example.test', now() - interval '10 days');
+  n := public.prune_salla_installs(60);
+  assert n = 1, format('expected 1 pruned, got %s', n);
+  assert exists (select 1 from public.salla_installs where salla_merchant_id = 'prune-recent'), 'recent install must survive';
+  n := public.prune_salla_installs(1);
+  assert n = 0, 'the horizon is clamped to >= 31 days (claim window is 30)';
+  assert not has_function_privilege('authenticated', 'public.prune_salla_installs(integer)', 'execute'), 'authenticated must not prune';
+  delete from public.salla_installs where salla_merchant_id like 'prune-%';
+end $$;

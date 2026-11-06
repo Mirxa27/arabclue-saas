@@ -410,9 +410,12 @@ describe("GET /auth/confirm (token hash)", () => {
       );
     };
 
-    it("resumes the next the sign-in was requested with (OAuth start, deep links)", async () => {
+    it("resumes the next the sign-in was requested with (deep links); OAuth starts land on their page", async () => {
+      // An email link must never continue straight into a route handler: /api/oauth/*/start
+      // would begin connecting the visitor's accounts under whatever account the link signed
+      // them into. It lands on /integrations, one deliberate click away.
       const oauth = await confirmWith(`${SITE}/auth/callback?next=${encodeURIComponent("/api/oauth/linkedin/start")}`);
-      expect(oauth.headers.get("location")).toBe("/api/oauth/linkedin/start");
+      expect(oauth.headers.get("location")).toBe("/integrations");
       const billing = await confirmWith(`${SITE}/auth/callback?next=%2Fbilling`);
       expect(billing.headers.get("location")).toBe("/billing");
     });

@@ -37,7 +37,7 @@ const MAX_TOKEN_LENGTH = 1024;
 const MAX_REDIRECT_TO_LENGTH = 4096;
 const CALLBACK_PATH = "/auth/callback";
 
-function isEmailOtpType(value: string | null): value is EmailOtpType & (typeof EMAIL_OTP_TYPES)[number] {
+export function isEmailOtpType(value: string | null): value is EmailOtpType & (typeof EMAIL_OTP_TYPES)[number] {
   return value !== null && (EMAIL_OTP_TYPES as readonly string[]).includes(value);
 }
 
@@ -88,9 +88,26 @@ function safeDecode(value: string): string | null {
   }
 }
 
+/**
+ * Where an email link may land. Never a route handler: an email link that continued
+ * straight into e.g. /api/oauth/meta/start would start connecting the visitor's
+ * accounts under whatever account the link signed them into. OAuth starts land on the
+ * page that offers the connect button instead (one deliberate click).
+ */
+export function emailLinkLandingPath(next: string): string {
+  if (!next.startsWith("/api/")) return next;
+  const employeeOAuth = /^\/api\/employees\/([0-9a-f-]{36})\/oauth\//i.exec(next);
+  if (employeeOAuth) return `/employees/${employeeOAuth[1]}?tab=integrations`;
+  if (next.startsWith("/api/oauth/") || next.startsWith("/api/salla/oauth/")) return "/integrations";
+  return DEFAULT_AFTER_LOGIN;
+}
+
+/** Query flag set by /auth/switch after the user explicitly chose to switch accounts. */
+export const SWITCH_CONFIRMED_PARAM = "switch";
+
 export async function completeEmailSignIn(req: NextRequest, route: string): Promise<NextResponse> {
   const params = req.nextUrl.searchParams;
-  const next = nextFromRedirectTo(req) ?? safeRedirectPath(params.get("next")) ?? DEFAULT_AFTER_LOGIN;
+  const next = emailLinkLandingPath(nextFromRedirectTo(req) ?? safeRedirectPath(params.get("next")) ?? DEFAULT_AFTER_LOGIN);
   const fail = (code: LoginErrorCode) => relativeRedirect(loginPath({ error: code, next }));
 
   // Supabase rejected the link itself (expired, already used, …) and says so in the URL.
@@ -108,6 +125,25 @@ export async function completeEmailSignIn(req: NextRequest, route: string): Prom
 
   const client = createRouteHandlerSupabase(req);
   if (!client) return fail("auth_unavailable");
+
+  // Token-hash links work in any browser, so an emailed link can belong to anyone
+  // (login CSRF). If someone is already signed in here, do not consume the link and
+  // silently replace their session: show an explicit choice first (/auth/switch); the
+  // link stays valid until the user decides. PKCE `code` links are bound to the browser
+  // that requested them (code verifier cookie), so they skip this step.
+  if (tokenHash && !code && params.get(SWITCH_CONFIRMED_PARAM) !== "1") {
+    let currentUser: { id: string } | null = null;
+    try {
+      const { data } = await client.auth.getUser();
+      currentUser = data.user;
+    } catch {
+      currentUser = null;
+    }
+    if (currentUser) {
+      const switchParams = new URLSearchParams({ token_hash: tokenHash, type: type as string, next });
+      return relativeRedirect(`/auth/switch?${switchParams.toString()}`);
+    }
+  }
 
   let error: AuthError | null;
   try {

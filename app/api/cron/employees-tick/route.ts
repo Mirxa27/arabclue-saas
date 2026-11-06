@@ -60,11 +60,16 @@ async function run(req: NextRequest): Promise<NextResponse> {
     }
 
     let pruned = 0;
+    let sallaInstallsPruned = 0;
     try {
       pruned = await pruneWebhookEvents(sb, 14);
     } catch (err) {
       reportError(err, { route: "cron/employees-tick" });
     }
+    // Parked (unclaimed) Salla Easy Mode installs hold encrypted tokens + the installer's email.
+    const { data: prunedInstalls, error: pruneInstallsError } = await sb.rpc("prune_salla_installs", { p_older_than_days: 60 });
+    if (pruneInstallsError) reportError(new Error(`prune_salla_installs: ${pruneInstallsError.message}`), { route: "cron/employees-tick" });
+    else sallaInstallsPruned = typeof prunedInstalls === "number" ? prunedInstalls : 0;
 
     return NextResponse.json({
       billing,
@@ -72,6 +77,7 @@ async function run(req: NextRequest): Promise<NextResponse> {
       deferred: deferred.length,
       failed: failed.length,
       webhookClaimsPruned: pruned,
+      sallaInstallsPruned,
       results
     });
   } catch (err) {

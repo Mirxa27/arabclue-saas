@@ -27,7 +27,9 @@ export async function middleware(req: NextRequest) {
   // /auth/* (code exchange, OTP verification) and /api/auth/* create, replace or clear the
   // session themselves and are always reachable without one. Refreshing the session here as
   // well would race their Set-Cookie headers.
-  if (isAuthEndpointPath(pathname)) return NextResponse.next();
+  // /auth/switch is a page, not an endpoint: it needs a refreshed session to show who is
+  // signed in (it renders before any token-hash link is consumed).
+  if (isAuthEndpointPath(pathname) && pathname !== "/auth/switch") return NextResponse.next();
 
   let res = NextResponse.next({ request: req });
   const supabase = createServerClient(supabaseUrl, supabaseAnonKey, {
@@ -84,7 +86,9 @@ function sameOriginTarget(path: string, requestUrl: string): URL {
   const base = new URL(requestUrl);
   try {
     const target = new URL(path, base);
-    if (target.origin === base.origin) return target;
+    // Same origin AND not a "//host" path: Next relativizes same-origin Locations, and a
+    // pathname starting with "//" would then be read by browsers as protocol-relative.
+    if (target.origin === base.origin && !target.pathname.startsWith("//")) return target;
   } catch {
     /* unparsable target → default below */
   }
