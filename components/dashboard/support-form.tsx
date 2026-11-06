@@ -111,7 +111,7 @@ export function SupportForm({ className }: { className?: string }) {
           </div>
           <div>
             <h3 className="text-sm font-semibold text-ink">تواصل معنا</h3>
-            <p className="text-[10px] text-ink-mute font-sans">نرد عادةً خلال ساعة</p>
+            <p className="text-[10px] text-ink-mute font-sans">نرد عادةً خلال يوم عمل واحد · Usually within one business day</p>
           </div>
         </div>
         <button

@@ -173,6 +173,18 @@ export const SECRET_GROUPS: SecretGroupDef[] = [
     title: "Wathq",
     description: "Commercial registry enrichment",
     fields: [{ key: "WATHQ_API_KEY", label: "Wathq API key", required: false, type: "secret" }]
+  },
+  {
+    id: "email",
+    title: "Email (Resend)",
+    description: "Transactional email: support acknowledgements, ticket relay, AI-employee email channel",
+    fields: [
+      { key: "RESEND_API_KEY", label: "Resend API key", required: false, type: "secret" },
+      { key: "EMAIL_FROM", label: "Default sender address", required: false, type: "text", hint: "e.g. arabclue <hello@arabclue.com> — the domain must be verified in Resend" },
+      { key: "SUPPORT_FROM_EMAIL", label: "Support sender address", required: false, type: "text", hint: "Falls back to EMAIL_FROM, then support@arabclue.com" },
+      { key: "SUPPORT_REPLY_TO", label: "Support reply-to address", required: false, type: "text" },
+      { key: "SUPPORT_INBOX_EMAIL", label: "Support inbox (ticket relay)", required: false, type: "text", hint: "New support tickets are forwarded here" }
+    ]
   }
 ];
 
