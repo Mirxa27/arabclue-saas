@@ -49,6 +49,18 @@ describe("aiText", () => {
     expect(mocks.anthropic).toHaveBeenCalledWith("claude-3-5-sonnet");
     expect(mocks.openai).not.toHaveBeenCalled();
   });
+
+  it("omits temperature for Claude models (current Claude models reject sampling params)", async () => {
+    await aiText({ prompt: "x", model: "claude-opus-5-5", temperature: 0.9 });
+    expect(mocks.generateText.mock.calls[0][0].temperature).toBeUndefined();
+    await aiStructured(z.object({ ok: z.boolean() }), { prompt: "x", model: "claude-sonnet-5-5" });
+    expect(mocks.generateObject.mock.calls[0][0].temperature).toBeUndefined();
+  });
+
+  it("keeps the requested temperature for OpenAI models", async () => {
+    await aiText({ prompt: "x", temperature: 0.9 });
+    expect(mocks.generateText.mock.calls[0][0].temperature).toBe(0.9);
+  });
 });
 
 describe("aiStructured", () => {

@@ -42,13 +42,23 @@ function resolveModel(name?: string, residency: Residency = "global") {
   return openai(name ?? "gpt-4o-mini");
 }
 
+/**
+ * Current Claude models (Opus 4.7+, Sonnet 5/5.5, Haiku 5.5, Fable) reject
+ * sampling parameters with a 400, so Claude calls use the model's default
+ * sampling; every other provider gets the requested temperature.
+ */
+function samplingTemperature(opts: AICallOptions, fallback: number): number | undefined {
+  if (opts.residency !== "ksa" && opts.model?.startsWith("claude")) return undefined;
+  return opts.temperature ?? fallback;
+}
+
 export async function aiText(opts: AICallOptions): Promise<string> {
   const model = resolveModel(opts.model, opts.residency);
   const { text } = await generateText({
     model,
     system: opts.system,
     prompt: opts.prompt,
-    temperature: opts.temperature ?? 0.6,
+    temperature: samplingTemperature(opts, 0.6),
     maxOutputTokens: opts.maxTokens ?? 1200
   });
   return text;
@@ -64,7 +74,7 @@ export async function aiStructured<T extends z.ZodType>(
     schema,
     system: opts.system,
     prompt: opts.prompt,
-    temperature: opts.temperature ?? 0.4,
+    temperature: samplingTemperature(opts, 0.4),
     maxOutputTokens: opts.maxTokens ?? 1500,
     // @ai-sdk/openai v3 enables OpenAI strict structured outputs by default, and
     // strict mode rejects any schema whose optional/defaulted fields are absent

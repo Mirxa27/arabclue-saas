@@ -79,28 +79,26 @@ async function testOpenAI(): Promise<ConnectionTestResult> {
   }
 }
 
+/**
+ * Validates the Anthropic API key with the Models endpoint (GET /v1/models):
+ * no model id to go stale and no tokens spent. The old check posted a message to
+ * a hard-coded model and counted HTTP 400 as success, so a malformed request
+ * passed while a valid key against a retired model id failed.
+ */
 async function testAnthropic(): Promise<ConnectionTestResult> {
   const key = process.env.ANTHROPIC_API_KEY;
   if (!key) return { ok: false, message: "ANTHROPIC_API_KEY not configured" };
   try {
-    const { latencyMs } = await timed(async () => {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-api-key": key,
-          "anthropic-version": "2023-06-01"
-        },
-        body: JSON.stringify({
-          model: "claude-3-5-haiku-20241022",
-          max_tokens: 8,
-          messages: [{ role: "user", content: "ping" }]
-        }),
-        signal: AbortSignal.timeout(20_000)
-      });
-      if (!res.ok && res.status !== 400) throw new Error(`HTTP ${res.status}`);
-    });
-    return { ok: true, message: "Anthropic API reachable", latencyMs };
+    const { result: res, latencyMs } = await timed(() =>
+      fetch("https://api.anthropic.com/v1/models?limit=1", {
+        headers: { "x-api-key": key, "anthropic-version": "2026-10-21" },
+        signal: AbortSignal.timeout(15_000)
+      })
+    );
+    if (res.status === 401) return { ok: false, message: "Anthropic rejected the API key (401)", latencyMs };
+    if (res.status === 403) return { ok: false, message: "Anthropic API key is not permitted to list models (403)", latencyMs };
+    if (!res.ok) return { ok: false, message: `Anthropic API error: HTTP ${res.status}`, latencyMs };
+    return { ok: true, message: "Anthropic API key valid", latencyMs };
   } catch (err) {
     return { ok: false, message: err instanceof Error ? err.message : "Anthropic test failed" };
   }
