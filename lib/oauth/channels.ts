@@ -1,5 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { encryptSecret } from "@/lib/crypto/secrets";
+import { HttpError } from "@/lib/api/errors";
+import { isUniqueViolation } from "@/lib/db/errors";
 import type { Platform } from "@/lib/social/types";
 
 export type ChannelTokens = {
@@ -27,6 +29,11 @@ export async function upsertSocialChannel(
     },
     { onConflict: "merchant_id,platform" }
   );
+  // social_channels_platform_external_id_key: one store per provider account (inbound
+  // webhooks are routed by external_id).
+  if (isUniqueViolation(error)) {
+    throw new HttpError(409, "This account is already connected to another arabclue store", "channel_already_connected");
+  }
   if (error) throw new Error(error.message);
 }
 

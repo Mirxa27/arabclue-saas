@@ -10,6 +10,12 @@ export type SellerAddress = {
   district?: string;
 };
 
+/**
+ * public.merchants. Through the Data API a merchant may only UPDATE seller_name,
+ * vat_number, cr_number, seller_address, store_url, dpa_accepted_at and dpa_version
+ * (supabase/migrations/20261106001100_api_grants.sql); plan, subscription_*, salla_*,
+ * tokens and zatca_* are written server-side with the service role.
+ */
 export type Merchant = {
   id: string;
   salla_merchant_id: string | null;
@@ -112,8 +118,11 @@ export type VoiceConfig = {
   hours: string | null;
   escalation_phone: string | null;
   knowledge: string | null;
+  /** Service-role only: provisioned Twilio number that inbound calls are routed by. */
   phone_number: string | null;
   twilio_incoming_sid?: string | null;
+  /** Set while POST /api/voice/provision-number holds the purchase reservation. */
+  provisioning_started_at?: string | null;
   enabled: boolean;
   updated_at: string | null;
 };

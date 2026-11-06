@@ -1,23 +1,31 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { requireUserApi, getCurrentMerchant } from "@/lib/auth/session";
+import { requireMerchantApi } from "@/lib/auth/session";
 import { getServiceSupabase } from "@/lib/db/supabase";
 import { handleRouteError, jsonError } from "@/lib/api/route-handler";
 import { merchantCanUseFeature, featureGateMessage } from "@/lib/billing/entitlements";
 import { getAgentSettings } from "@/lib/admin/platform-settings";
-import { getTwilioConfig, provisionVoiceNumber, releaseVoiceNumber } from "@/lib/voice/twilio";
+import { getTwilioConfig } from "@/lib/voice/twilio";
+import { provisionMerchantVoiceNumber } from "@/lib/voice/twilio-provisioning";
+import { rateLimit, rateLimitHeaders } from "@/lib/security/rate-limit";
 
 export const runtime = "nodejs";
+
+const ROUTE = "POST /api/voice/provision-number";
 
 const BodySchema = z.object({
   replace: z.boolean().optional()
 });
 
+/**
+ * Buy (or replace) the merchant's Twilio number. Each purchase is billed to the
+ * platform's Twilio account, so it is reserved atomically in the database (409 while
+ * another request holds the reservation), capped per merchant per day (429), and
+ * burst-limited per merchant regardless of IP.
+ */
 export async function POST(req: NextRequest) {
   try {
-    await requireUserApi();
-    const merchant = await getCurrentMerchant();
-    if (!merchant) return jsonError("no merchant", 400);
+    const merchant = await requireMerchantApi();
 
     const agents = await getAgentSettings();
     if (!agents.voice.enabled) return jsonError("Voice agent is disabled platform-wide", 503);
@@ -30,45 +38,24 @@ export async function POST(req: NextRequest) {
       return jsonError("Twilio is not configured (TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)", 503);
     }
 
+    const burst = await rateLimit(`voice:provision-number:${merchant.id}`, 5, 60 * 60_000);
+    if (!burst.success) {
+      return NextResponse.json(
+        { error: "Too many requests. Try again shortly." },
+        { status: 429, headers: rateLimitHeaders(burst) }
+      );
+    }
+
     const body = BodySchema.parse(await req.json().catch(() => ({})));
-    const supabase = getServiceSupabase();
-    const { data: existing } = await supabase
-      .from("voice_configs")
-      .select("phone_number, twilio_incoming_sid")
-      .eq("merchant_id", merchant.id)
-      .maybeSingle();
-
-    if (existing?.phone_number && !body.replace) {
-      return NextResponse.json({
-        ok: true,
-        phoneNumber: existing.phone_number,
-        alreadyProvisioned: true
-      });
-    }
-
-    if (existing?.twilio_incoming_sid && body.replace) {
-      await releaseVoiceNumber(twilio, existing.twilio_incoming_sid).catch(() => undefined);
-    }
-
-    const { sid, phoneNumber } = await provisionVoiceNumber(twilio);
-
-    const { error } = await supabase.from("voice_configs").upsert({
-      merchant_id: merchant.id,
-      phone_number: phoneNumber,
-      twilio_incoming_sid: sid,
-      enabled: true,
-      updated_at: new Date().toISOString()
-    });
-    if (error) throw new Error(error.message);
-
-    await supabase.from("events").insert({
-      kind: "voice.number_provisioned",
-      merchant: merchant.id,
-      payload: { phoneNumber, sid }
+    const result = await provisionMerchantVoiceNumber(getServiceSupabase(), twilio, merchant.id, {
+      replace: body.replace ?? false
     });
 
-    return NextResponse.json({ ok: true, phoneNumber, sid });
+    if (result.status === "already_provisioned") {
+      return NextResponse.json({ ok: true, phoneNumber: result.phoneNumber, alreadyProvisioned: true });
+    }
+    return NextResponse.json({ ok: true, phoneNumber: result.phoneNumber, sid: result.sid, replaced: result.replaced });
   } catch (err) {
-    return handleRouteError(err);
+    return handleRouteError(err, { route: ROUTE });
   }
 }

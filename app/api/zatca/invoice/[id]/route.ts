@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireUserApi, getCurrentMerchant } from "@/lib/auth/session";
-import { getServerSupabase } from "@/lib/db/supabase";
+import { getServerSupabase, getServiceSupabase } from "@/lib/db/supabase";
 import { submitToFatoora } from "@/lib/zatca/fatoora";
 
 export async function GET(_req: NextRequest, props: { params: Promise<{ id: string }> }) {
@@ -41,10 +41,15 @@ export async function POST(_req: NextRequest, props: { params: Promise<{ id: str
     base: process.env.ZATCA_FATOORA_BASE
   });
 
-  await supabase
+  // invoices are not writable through the Data API; ownership was checked by the read above.
+  const { error: updateErr } = await getServiceSupabase()
     .from("invoices")
     .update({ status: result.cleared ? "cleared" : "rejected", fatoora_response: result.raw })
-    .eq("id", params.id);
+    .eq("id", params.id)
+    .eq("merchant_id", merchant.id);
+  if (updateErr) {
+    return NextResponse.json({ error: "Could not record the Fatoora result" }, { status: 500 });
+  }
 
   return NextResponse.json(result);
 }

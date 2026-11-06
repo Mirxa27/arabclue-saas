@@ -5,13 +5,19 @@ import { z } from "zod";
 import { requireUserApi, getCurrentMerchant } from "@/lib/auth/session";
 import { getServerSupabase } from "@/lib/db/supabase";
 import { handleRouteError } from "@/lib/api/route-handler";
+import { assertNoDbError } from "@/lib/db/errors";
 
 const Schema = z.object({
-  brand_name: z.string().min(1),
-  essence: z.string().optional().default(""),
-  attributes: z.array(z.string()).max(20).default([]),
-  favor_words: z.array(z.string()).max(50).default([]),
-  avoid_words: z.array(z.string()).max(50).default([]),
+  brand_name: z.string().trim().min(1).max(200),
+  // Kits saved before this schema can hold a NULL essence; the page sends it back as-is.
+  essence: z
+    .string()
+    .max(1000)
+    .nullish()
+    .transform((v) => v ?? ""),
+  attributes: z.array(z.string().max(60)).max(20).default([]),
+  favor_words: z.array(z.string().max(60)).max(50).default([]),
+  avoid_words: z.array(z.string().max(60)).max(50).default([]),
   dialect: z.enum(["khaliji", "msa", "english"]).default("khaliji")
 });
 
@@ -22,10 +28,11 @@ export async function POST(req: NextRequest) {
     if (!merchant) return NextResponse.json({ error: "no merchant" }, { status: 400 });
     const body = Schema.parse(await req.json());
     const supabase = await getServerSupabase();
+    // One kit per merchant: brand_kits_merchant_id_key (20261106001000) backs this conflict target.
     const { error } = await supabase
       .from("brand_kits")
       .upsert({ ...body, merchant_id: merchant.id, updated_at: new Date().toISOString() }, { onConflict: "merchant_id" });
-    if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+    assertNoDbError(error, "Save brand kit", { merchantId: merchant.id, route: "POST /api/brand-kit" });
     return NextResponse.json({ ok: true });
   } catch (err) {
     return handleRouteError(err, { route: "POST /api/brand-kit" });

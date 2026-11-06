@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { requireUserApi, getCurrentMerchant } from "@/lib/auth/session";
-import { getServerSupabase } from "@/lib/db/supabase";
+import { requireMerchantApi } from "@/lib/auth/session";
+import { getServiceSupabase } from "@/lib/db/supabase";
 import { disconnectSocialChannel } from "@/lib/oauth/channels";
 import { handleRouteError } from "@/lib/api/route-handler";
 
@@ -11,15 +11,12 @@ const BodySchema = z.object({
 
 export async function POST(req: NextRequest) {
   try {
-    await requireUserApi();
-    const merchant = await getCurrentMerchant();
-    if (!merchant) return NextResponse.json({ error: "no merchant" }, { status: 400 });
-
+    const merchant = await requireMerchantApi();
     const body = BodySchema.parse(await req.json());
-    const supabase = await getServerSupabase();
-    await disconnectSocialChannel(supabase, merchant.id, body.platform);
+    // social_channels is not writable through the Data API; scoped to the session's merchant.
+    await disconnectSocialChannel(getServiceSupabase(), merchant.id, body.platform);
     return NextResponse.json({ ok: true, platform: body.platform });
   } catch (err) {
-    return handleRouteError(err);
+    return handleRouteError(err, { route: "POST /api/integrations/social/disconnect" });
   }
 }

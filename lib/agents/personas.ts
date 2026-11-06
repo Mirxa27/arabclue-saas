@@ -8,7 +8,7 @@
  *   - Communication voice/register
  *   - Cultural context (Saudi/Gulf market awareness)
  *
- * Personas are persisted in `ai_employees.config` and can be customised per merchant.
+ * Per-merchant persona overrides are persisted in `agent_settings.overrides`.
  */
 
 import type { BrandVoice, Dialect } from "@/lib/social/types";
@@ -302,7 +302,7 @@ export function getActivePersonas(): AgentPersona[] {
 }
 
 /**
- * Merge a default persona with merchant-specific overrides from `ai_employees.config`.
+ * Merge a default persona with merchant-specific overrides from `agent_settings.overrides`.
  * The merchant can override: name, avatar, tone (→ traits), knowledge.
  */
 export function applyMerchantOverrides(

@@ -1,16 +1,16 @@
 import { NextResponse } from "next/server";
-import { requireUserApi, getCurrentMerchant } from "@/lib/auth/session";
-import { getServerSupabase } from "@/lib/db/supabase";
+import { requireMerchantApi } from "@/lib/auth/session";
+import { getServiceSupabase } from "@/lib/db/supabase";
 import { handleRouteError } from "@/lib/api/route-handler";
+import { assertNoDbError } from "@/lib/db/errors";
 
 export async function POST() {
   try {
-    await requireUserApi();
-    const merchant = await getCurrentMerchant();
-    if (!merchant) return NextResponse.json({ error: "no merchant" }, { status: 400 });
+    const merchant = await requireMerchantApi();
 
-    const supabase = await getServerSupabase();
-    const { error } = await supabase
+    // Salla tokens/state are not writable through the Data API; the session check above
+    // scopes this service-role write to the caller's own merchant row.
+    const { error } = await getServiceSupabase()
       .from("merchants")
       .update({
         access_token: null,
@@ -21,9 +21,9 @@ export async function POST() {
       })
       .eq("id", merchant.id);
 
-    if (error) throw new Error(error.message);
+    assertNoDbError(error, "Disconnect Salla", { merchantId: merchant.id, route: "POST /api/merchant/disconnect-salla" });
     return NextResponse.json({ ok: true });
   } catch (err) {
-    return handleRouteError(err);
+    return handleRouteError(err, { route: "POST /api/merchant/disconnect-salla" });
   }
 }

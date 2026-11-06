@@ -1,52 +1,35 @@
-import { NextResponse } from "next/server";
-import { z } from "zod";
-import { getCurrentMerchant } from "@/lib/auth/session";
+/**
+ * POST /api/feedback — store a thumbs-up/down from the dashboard feedback widget.
+ * Signed-in users only, rate-limited; a failed insert is a 5xx (the widget then shows
+ * its error state instead of thanking the user for feedback that was never stored).
+ */
+import { NextRequest, NextResponse } from "next/server";
+import { getCurrentMerchant, requireUserApi } from "@/lib/auth/session";
+import { getServiceSupabase } from "@/lib/db/supabase";
+import { formatZodIssues, handleRouteError } from "@/lib/api/route-handler";
+import { enforceRateLimit } from "@/lib/security/rate-limit";
+import { FeedbackBodySchema, recordFeedback } from "@/lib/support/tickets";
 
-const FeedbackBodySchema = z.object({
-  sentiment: z.enum(["up", "down"]),
-  reasons: z.array(z.string()).max(10).default([]),
-  note: z.string().max(2000).optional(),
-  path: z.string().optional(),
-});
-
-export async function POST(request: Request) {
+export async function POST(req: NextRequest) {
   try {
+    const user = await requireUserApi();
+    const limited = await enforceRateLimit(req, "feedback:create", 20, 15 * 60_000, user.id);
+    if (limited instanceof NextResponse) return limited;
+
+    const parsed = FeedbackBodySchema.safeParse(await req.json().catch(() => null));
+    if (!parsed.success) {
+      return NextResponse.json({ error: formatZodIssues(parsed.error) }, { status: 400 });
+    }
     const merchant = await getCurrentMerchant();
 
-    const body = await request.json();
-    const parsed = FeedbackBodySchema.safeParse(body);
-    if (!parsed.success) {
-      return NextResponse.json(
-        { error: "Invalid request body", details: parsed.error.flatten() },
-        { status: 400 },
-      );
-    }
-
-    const { sentiment, reasons, note, path } = parsed.data;
-
-    // Store in user_feedback table if available
-    const { getServerSupabase } = await import("@/lib/db/supabase");
-    const supabase = await getServerSupabase();
-
-    const { error } = await supabase.from("user_feedback").insert({
-      merchant_id: merchant?.id ?? null,
-      sentiment,
-      reasons,
-      note: note ?? null,
-      path: path ?? null,
+    await recordFeedback(getServiceSupabase(), {
+      userId: user.id,
+      merchantId: merchant?.id ?? null,
+      ...parsed.data
     });
-
-    if (error) {
-      // Table might not exist yet
-      console.warn("[feedback] DB insert failed — table may not exist yet:", error.message);
-    }
 
     return NextResponse.json({ success: true }, { status: 201 });
   } catch (err) {
-    console.error("[feedback] Unexpected error:", err);
-    return NextResponse.json(
-      { error: "Internal server error" },
-      { status: 500 },
-    );
+    return handleRouteError(err, { route: "POST /api/feedback" });
   }
 }

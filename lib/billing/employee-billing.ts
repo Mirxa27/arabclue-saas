@@ -1,7 +1,9 @@
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { getServerSupabase, getServiceSupabase } from "@/lib/db/supabase";
 import { fetchMoyasarPayment, verifyPaymentMatchesIntent } from "@/lib/moyasar/client";
 import type { AIEmployeeRow } from "@/lib/employees/types";
-import { notFound } from "@/lib/api/errors";
+import { HttpError, notFound } from "@/lib/api/errors";
+import { assertNoDbError } from "@/lib/db/errors";
 
 const SUBSCRIPTION_DAYS = 30;
 
@@ -18,6 +20,12 @@ export type EmployeeBillingPaymentRow = {
   metadata: Record<string, string> | null;
 };
 
+/**
+ * Create a seat billing intent. The employee is read through the merchant's own
+ * session (RLS proves ownership); the intent is written by the service role because
+ * billing_payments is not writable through the Data API. The price comes from
+ * ai_employees.monthly_charge_halalas, which only the server can set.
+ */
 export async function createEmployeeBillingIntent(merchantId: string, employeeId: string) {
   const sb = await getServerSupabase();
   const { data: employee, error: empErr } = await sb
@@ -32,7 +40,7 @@ export async function createEmployeeBillingIntent(merchantId: string, employeeId
   const givenId = crypto.randomUUID();
   const amount = row.monthly_charge_halalas;
 
-  const { data, error } = await sb
+  const { data, error } = await getServiceSupabase()
     .from("billing_payments")
     .insert({
       merchant_id: merchantId,
@@ -54,20 +62,22 @@ export async function createEmployeeBillingIntent(merchantId: string, employeeId
     .select("*")
     .single();
 
-  if (error || !data) throw new Error(error?.message ?? "Failed to create billing intent");
+  assertNoDbError(error, "Create employee billing intent", { merchantId, code: "billing_intent_failed" });
+  if (!data) throw new HttpError(500, "Create employee billing intent failed", "billing_intent_failed");
   return { intent: data as EmployeeBillingPaymentRow, employee: row };
 }
 
+/** Client-side confirmation; merchantId comes from the session. */
 export async function confirmEmployeeBillingPayment(args: {
   merchantId: string;
   moyasarPaymentId: string;
   intentId: string;
 }) {
-  return confirmEmployeeBillingWithClient(await getServerSupabase(), args);
+  return confirmEmployeeBillingWithClient(getServiceSupabase(), args);
 }
 
 async function confirmEmployeeBillingWithClient(
-  supabase: Awaited<ReturnType<typeof getServerSupabase>>,
+  supabase: SupabaseClient,
   args: { merchantId: string; moyasarPaymentId: string; intentId: string }
 ) {
   const { data: intent, error } = await supabase
@@ -106,18 +116,10 @@ async function confirmEmployeeBillingWithClient(
   const nextBilling = new Date(now);
   nextBilling.setDate(nextBilling.getDate() + SUBSCRIPTION_DAYS);
 
-  await supabase
-    .from("billing_payments")
-    .update({
-      status: "paid",
-      moyasar_payment_id: payment.id,
-      moyasar_payload: payment,
-      paid_at: now.toISOString(),
-      updated_at: now.toISOString()
-    })
-    .eq("id", row.id);
-
-  await supabase
+  // Activate the seat first, then mark the intent paid: a failure between the two leaves
+  // the intent unpaid so a retry re-runs the activation instead of returning "already
+  // paid" for a seat that was never activated.
+  const { error: employeeErr } = await supabase
     .from("ai_employees")
     .update({
       billing_status: "active",
@@ -127,6 +129,20 @@ async function confirmEmployeeBillingWithClient(
     })
     .eq("id", employeeId)
     .eq("merchant_id", args.merchantId);
+  assertNoDbError(employeeErr, "Activate employee seat", { merchantId: args.merchantId, code: "activation_failed" });
+
+  const { error: paymentErr } = await supabase
+    .from("billing_payments")
+    .update({
+      status: "paid",
+      moyasar_payment_id: payment.id,
+      moyasar_payload: payment,
+      paid_at: now.toISOString(),
+      updated_at: now.toISOString()
+    })
+    .eq("id", row.id)
+    .eq("merchant_id", args.merchantId);
+  assertNoDbError(paymentErr, "Record employee billing payment", { merchantId: args.merchantId, code: "activation_failed" });
 
   return { alreadyPaid: false, employeeId };
 }

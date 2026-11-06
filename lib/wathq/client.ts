@@ -10,6 +10,7 @@
  * Rate limits: tier-dependent; cache aggressively in Supabase.
  */
 import { z } from "zod";
+import { getServiceSupabase } from "@/lib/db/supabase";
 
 const BASE = "https://api.wathq.sa";
 
@@ -33,25 +34,35 @@ export async function lookupCR(crNumber: string, apiKey: string): Promise<CRSumm
   return CRSummarySchema.parse(data);
 }
 
-// Cached enrichment used by the dashboard
-import { getServerSupabase } from "@/lib/db/supabase";
+// Cached enrichment used by the dashboard.
+// wathq_cache is service-role only (RLS on, no Data API grants): served for 14 days as
+// "verified" registry data, it must never be writable by clients.
 
 const CACHE_TTL_DAYS = 14;
 
 export async function enrichCR(crNumber: string, apiKey: string): Promise<CRSummary | null> {
-  const supabase = await getServerSupabase();
-  const cached = await supabase.from("wathq_cache").select("*").eq("cr_number", crNumber).single();
+  const supabase = getServiceSupabase();
+  const cached = await supabase
+    .from("wathq_cache")
+    .select("payload, fetched_at")
+    .eq("cr_number", crNumber)
+    .maybeSingle();
   if (cached.data) {
     const ageDays = (Date.now() - new Date(cached.data.fetched_at).getTime()) / 86_400_000;
-    if (ageDays < CACHE_TTL_DAYS) return cached.data.payload as CRSummary;
+    if (ageDays < CACHE_TTL_DAYS) {
+      const parsed = CRSummarySchema.safeParse(cached.data.payload);
+      if (parsed.success) return parsed.data;
+    }
   }
   const fresh = await lookupCR(crNumber, apiKey);
   if (fresh) {
-    await supabase.from("wathq_cache").upsert({
+    // Best-effort cache write: a failure only costs a repeat lookup next time.
+    const { error } = await supabase.from("wathq_cache").upsert({
       cr_number: crNumber,
       payload: fresh,
       fetched_at: new Date().toISOString()
     });
+    if (error) console.warn("[wathq] cache write failed:", error.code ?? error.message);
   }
   return fresh;
 }
